@@ -54,38 +54,81 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(header("设置"))
 
         // --- 接口 ---
-        root.addView(section("接口"))
+        root.addView(section("模型供应商"))
         val card1 = card()
-        card1.addView(label("判断接口协议"))
-        val protocols = listOf("OpenRouter Decisions", "JEV 官方 System One", "自定义 System One")
-        val providerIds = listOf("openrouter", "official", "custom")
-        val provider = Spinner(this).apply {
-            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, protocols)
-            setSelection(providerIds.indexOf(prefs.decisionProvider).coerceAtLeast(0))
+        card1.addView(label("JEV Key"))
+        val jevKeyEdit = edit(prefs.jevKey, "只需填写 Key，接口与模型已内置", password = true)
+        card1.addView(jevKeyEdit)
+        card1.addView(text("JEV 负责理解对话与排序；自定义大语言模型负责生成回复。", 12f, sub).apply {
+            setPadding(0, dp(6), 0, dp(8))
+        })
+        card1.addView(label("自定义供应商名称"))
+        val providerNameEdit = edit(prefs.llmProviderName, "例如：我的 API")
+        card1.addView(providerNameEdit)
+        card1.addView(label("接口协议"))
+        val protocolNames = listOf("OpenAI 兼容", "Google Gemini", "Anthropic Claude")
+        val protocolIds = listOf("openai", "gemini", "claude")
+        val protocol = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, protocolNames)
+            setSelection(protocolIds.indexOf(prefs.llmProtocol).coerceAtLeast(0))
         }
-        card1.addView(provider)
-        card1.addView(label("判断接口密钥"))
-        val decisionKeyEdit = edit(prefs.decisionKey, "留空沿用原 OpenRouter 密钥", password = true)
-        card1.addView(decisionKeyEdit)
-        card1.addView(label("自定义判断请求地址（完整 HTTPS URL）"))
-        val decisionUrlEdit = edit(prefs.decisionUrl, "https://example.com/v1/systemone")
-        card1.addView(decisionUrlEdit)
-        card1.addView(label("判断模型（留空使用协议默认值）"))
-        val decisionModelEdit = edit(prefs.decisionModel, "jev-latest")
-        card1.addView(decisionModelEdit)
-        card1.addView(label("回复生成协议：OpenAI Chat Completions"))
-        card1.addView(label("回复生成请求地址（完整 HTTPS URL）"))
-        val chatUrlEdit = edit(prefs.chatUrl, Prefs.DEFAULT_CHAT_URL)
-        card1.addView(chatUrlEdit)
-        card1.addView(label("回复生成密钥"))
-        val chatKeyEdit = edit(prefs.chatKey, "留空沿用原 OpenRouter 密钥", password = true)
+        card1.addView(protocol)
+        card1.addView(label("API Key"))
+        val chatKeyEdit = edit(prefs.chatKey, "供应商 API Key", password = true)
         card1.addView(chatKeyEdit)
-        card1.addView(label("回复生成模型"))
-        val modelEdit = edit(prefs.replyModel, Prefs.DEFAULT_REPLY_MODEL)
-        card1.addView(modelEdit)
-        card1.addView(label("旧版 OpenRouter 密钥（兼容已有配置）"))
-        val keyEdit = edit(prefs.openRouterKey, "已配置可留存；新用户按上方分别填写", password = true)
-        card1.addView(keyEdit)
+        card1.addView(label("生成回复请求地址"))
+        val chatUrlEdit = edit(prefs.chatUrl, "https://example.com/v1/chat/completions")
+        card1.addView(chatUrlEdit)
+        card1.addView(text("Gemini 地址可用 {model} 作为模型占位符。", 12f, sub).apply {
+            setPadding(0, dp(5), 0, 0)
+        })
+
+        var fetchedModels = emptyList<String>()
+        val addedModels = prefs.availableModels.toMutableSet()
+        card1.addView(label("当前使用模型"))
+        val modelItems = addedModels.sorted().ifEmpty { listOf("（请先拉取并添加模型）") }.toMutableList()
+        val modelAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modelItems)
+        val modelSpinner = Spinner(this).apply { adapter = modelAdapter }
+        card1.addView(modelSpinner)
+        if (prefs.replyModel.isNotBlank()) {
+            val index = addedModels.sorted().indexOf(prefs.replyModel)
+            if (index >= 0) modelSpinner.setSelection(index)
+        }
+        val modelStatus = text("已添加 ${addedModels.size} 个模型", 12f, sub).apply {
+            setPadding(0, dp(8), 0, 0)
+        }
+        card1.addView(modelStatus)
+        card1.addView(secondaryBtn("拉取供应商模型") {
+            val key = chatKeyEdit.text.toString().trim()
+            val url = chatUrlEdit.text.toString().trim()
+            if (key.isBlank() || !validEndpoint(url)) {
+                modelStatus.text = "请先填写 API Key 和完整 HTTPS 请求地址"
+                return@secondaryBtn
+            }
+            modelStatus.text = "正在拉取模型…"
+            worker.execute {
+                try {
+                    val models = JevClient.fetchModels(protocolIds[protocol.selectedItemPosition], key, url)
+                    main.post {
+                        fetchedModels = models
+                        modelStatus.text = if (models.isEmpty()) "供应商未返回可用模型" else "已拉取 ${models.size} 个模型，可一键添加"
+                    }
+                } catch (e: Exception) {
+                    main.post { modelStatus.text = "拉取失败：${e.message ?: "未知错误"}" }
+                }
+            }
+        })
+        card1.addView(secondaryBtn("一键添加全部模型") {
+            if (fetchedModels.isEmpty()) { modelStatus.text = "请先拉取模型"; return@secondaryBtn }
+            addedModels.addAll(fetchedModels); prefs.availableModels = addedModels
+            modelAdapter.clear(); modelAdapter.addAll(addedModels.sorted()); modelAdapter.notifyDataSetChanged()
+            modelStatus.text = "已添加全部 ${addedModels.size} 个模型"
+        })
+        card1.addView(secondaryBtn("一键取消添加全部模型") {
+            addedModels.clear(); prefs.availableModels = emptySet(); prefs.replyModel = ""
+            modelAdapter.clear(); modelAdapter.add("（请先拉取并添加模型）"); modelAdapter.notifyDataSetChanged()
+            modelStatus.text = "已取消添加全部模型"
+        })
         root.addView(card1)
 
         // --- 分析 ---
@@ -125,21 +168,16 @@ class SettingsActivity : AppCompatActivity() {
         // --- Actions ---
         val result = text("", 13f, sub).apply { setPadding(0, dp(12), 0, dp(4)) }
         root.addView(primaryBtn("保存") {
-            val decisionUrl = if (provider.selectedItemPosition == 1) "https://api.typesafe.ai/v1/systemone"
-                else if (provider.selectedItemPosition == 2) decisionUrlEdit.text.toString().trim()
-                else "https://openrouter.ai/api/alpha/decisions"
-            val chatUrl = chatUrlEdit.text.toString().trim().ifBlank { Prefs.DEFAULT_CHAT_URL }
-            if (!validEndpoint(decisionUrl) || !validEndpoint(chatUrl)) {
-                result.text = "请求地址须为完整 HTTPS URL"; return@primaryBtn
-            }
-            prefs.openRouterKey = keyEdit.text.toString()
-            prefs.decisionProvider = providerIds[provider.selectedItemPosition]
-            prefs.decisionKey = decisionKeyEdit.text.toString()
-            prefs.decisionUrl = decisionUrlEdit.text.toString()
-            prefs.decisionModel = decisionModelEdit.text.toString()
+            val chatUrl = chatUrlEdit.text.toString().trim()
+            if (!validEndpoint(chatUrl)) { result.text = "请求地址须为完整 HTTPS URL"; return@primaryBtn }
+            if (addedModels.isEmpty()) { result.text = "请先拉取并添加至少一个模型"; return@primaryBtn }
+            prefs.jevKey = jevKeyEdit.text.toString()
+            prefs.llmProviderName = providerNameEdit.text.toString().ifBlank { "自定义供应商" }
+            prefs.llmProtocol = protocolIds[protocol.selectedItemPosition]
             prefs.chatKey = chatKeyEdit.text.toString()
-            prefs.chatUrl = chatUrlEdit.text.toString().ifBlank { Prefs.DEFAULT_CHAT_URL }
-            prefs.replyModel = modelEdit.text.toString().ifBlank { Prefs.DEFAULT_REPLY_MODEL }
+            prefs.chatUrl = chatUrl
+            prefs.availableModels = addedModels
+            prefs.replyModel = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             prefs.relationship = relEdit.text.toString().ifBlank { Prefs.DEFAULT_REL }
             prefs.whitelist = wlEdit.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: true
@@ -147,28 +185,20 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
         })
         root.addView(secondaryBtn("连通测试") {
-            val fallbackKey = keyEdit.text.toString().trim()
-            val key = decisionKeyEdit.text.toString().trim().ifBlank { fallbackKey }
-            val chatKey = chatKeyEdit.text.toString().trim().ifBlank { fallbackKey }
-            val model = modelEdit.text.toString().trim().ifBlank { Prefs.DEFAULT_REPLY_MODEL }
-            val decisionUrl = when (provider.selectedItemPosition) {
-                1 -> "https://api.typesafe.ai/v1/systemone"
-                2 -> decisionUrlEdit.text.toString().trim()
-                else -> "https://openrouter.ai/api/alpha/decisions"
-            }
-            val decisionModel = decisionModelEdit.text.toString().trim().ifBlank {
-                if (provider.selectedItemPosition == 1) "jev-latest" else "typesafe/jev-1.13"
-            }
-            val chatUrl = chatUrlEdit.text.toString().trim().ifBlank { Prefs.DEFAULT_CHAT_URL }
-            if (key.isBlank() || chatKey.isBlank()) { result.text = "请填写判断与回复接口密钥"; return@secondaryBtn }
-            if (!validEndpoint(decisionUrl) || !validEndpoint(chatUrl)) {
+            val key = jevKeyEdit.text.toString().trim()
+            val chatKey = chatKeyEdit.text.toString().trim()
+            val model = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
+            val chatUrl = chatUrlEdit.text.toString().trim()
+            if (key.isBlank() || chatKey.isBlank() || model.isBlank()) { result.text = "请填写两个 Key 并选择模型"; return@secondaryBtn }
+            if (!validEndpoint(chatUrl)) {
                 result.text = "请求地址须为完整 HTTPS URL"; return@secondaryBtn
             }
             result.text = "测试中…"
             worker.execute {
                 val demo = ChatSnapshot("连通测试", listOf(
                     Msg("other", "在吗？"), Msg("me", "在"), Msg("other", "那你说说昨天答应我的事")))
-                val a = JevClient(key, model, decisionUrl, decisionModel, chatKey, chatUrl).analyze(demo, relEdit.text.toString())
+                val a = JevClient(key, model, Prefs.JEV_URL, Prefs.JEV_MODEL, chatKey, chatUrl,
+                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, relEdit.text.toString())
                 main.post {
                     result.text = if (a.error != null) "失败：${a.error}"
                     else "成功：意图=${a.trueIntent?.choice ?: "?"}，候选=${a.rankedReplies.size} 条，耗时 ${a.latencyMs}ms"

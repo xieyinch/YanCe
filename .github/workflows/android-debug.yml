@@ -17,10 +17,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK packages
-        run: |
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -print -quit)"
-          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - run: bash gradlew :app:assembleDebug
       - uses: actions/upload-artifact@v4

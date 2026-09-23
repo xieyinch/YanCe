@@ -134,10 +134,13 @@ open class ChatCaptureService : AccessibilityService() {
     private fun runAnalysis() {
         val snapshot = pendingSnapshot ?: return
         if (analyzing) return
-        if (!prefs.hasKey()) { main.post { overlay?.showError("未设置判断接口密钥，去设置里填") }; return }
+        if (!prefs.hasKey()) { main.post { overlay?.showError("请先设置 JEV Key 和大语言模型供应商") }; return }
         analyzing = true
         main.post { overlay?.showLoading() }
-        val client = JevClient(prefs.effectiveDecisionKey(), prefs.replyModel, prefs.effectiveDecisionUrl(), prefs.effectiveDecisionModel(), prefs.effectiveChatKey(), prefs.chatUrl)
+        val client = JevClient(
+            prefs.jevKey, prefs.replyModel, Prefs.JEV_URL, Prefs.JEV_MODEL,
+            prefs.chatKey, prefs.chatUrl, prefs.llmProtocol
+        )
         val rel = prefs.relationship
         // Judgment is fast (~1s) — show it immediately.
         submit {

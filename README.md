@@ -31,7 +31,7 @@
 </p>
 
 - **左：悬浮窗实拍**——挂在微信聊天上方的半透明面板：危险等级（如「危险 1/9 安全」）、对方真实意图与把握度、Jev 排好序的候选回复（每条带占比，可**复制**或**填入**输入框，发送始终你自己点）。
-- **右：设置页**——接口（OpenRouter 密钥、回复生成模型）、分析（关系描述、会话白名单、对方发消息时自动分析）、外观（悬浮窗不透明度）。
+- **右：设置页**——JEV Key、自定义大语言模型供应商、模型管理、分析与悬浮窗外观。
 
 ## 它怎么工作
 
@@ -64,10 +64,10 @@
 
 ## 下载安装
 
-下载 APK：在 GitHub Actions 的 Android debug build 运行结果中下载 `jev-assistant-debug` 构建产物。
+不想自己编译，直接装仓库里编好的包：[`apk/jev-assistant-v1.1-release.apk`](apk/jev-assistant-v1.1-release.apk)（2026-09-21 构建，release 签名，Android 11+）。
 
 ```bash
-adb install -r app-debug.apk
+adb install -r apk/jev-assistant-v1.1-release.apk
 ```
 
 之前装过 debug 包的要先卸载再装（签名不同，覆盖会失败），卸载会清掉已填的密钥和设置。小米 / HyperOS 重装后悬浮窗权限会被重置，装完按主页向导再开一次。
@@ -90,9 +90,10 @@ adb install -r app-debug.apk
 ## 配置与授权
 
 1. 装 APK（见上面「下载安装」，或自己构建），打开「Jev 聊天助手」。
-2. 在**设置**中选择判断协议：OpenRouter Decisions（兼容旧配置）、JEV 官方 System One，或自定义 System One 完整 HTTPS 请求地址。官方模式使用 `https://api.typesafe.ai/v1/systemone` 和 `jev-latest`，需要 TypeSafe API Key。自定义模式可填写判断模型；其服务必须兼容 `{model,state,questions}` 请求与 `{answers:...}` 响应。
-3. 回复生成单独配置 OpenAI Chat Completions 兼容的完整 HTTPS 请求地址、密钥与模型；默认仍是 OpenRouter。判断模型只做结构化决策，不生成回复文本。旧版 OpenRouter 密钥保留作为两个接口的密钥回退值；连接测试会同时调用两个接口。自定义接口会收到聊天内容，请只填你信任的服务。
-3. 按主页向导开三项权限：
+2. 在**设置**中填写 JEV Key。JEV 判断固定使用官方 `https://api.typesafe.ai/v1/systemone` 与 `jev-latest`。
+3. 添加一个用于生成回复的自定义大语言模型供应商，协议可选 OpenAI 兼容、Google Gemini 或 Anthropic Claude。填写 API Key 与生成请求地址后，点“拉取供应商模型”，可一键添加全部模型或一键取消添加全部模型，再选择当前使用的模型。
+4. JEV 负责结构化判断与候选排序，自定义大语言模型负责起草 3 条回复。自定义接口会收到聊天内容，请只填写你信任的服务。
+5. 按主页向导开三项权限：
    - **无障碍**（读消息）
    - **悬浮窗 / 显示在其他应用上层**（展示分析）
    - **自启动 + 省电无限制**（小米/HyperOS 必做，否则后台进程被冻结、读不到消息）

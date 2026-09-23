@@ -15,19 +15,19 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Talks to OpenRouter: one generative call to draft 3 candidate replies, then a
- * single Jev "decisions" call carrying all 7 judgment questions plus the ranking
- * question (speculative fan-out). Uses HttpURLConnection only (no deps).
+ * Uses the official Jev endpoint for structured judgments and a user-configured
+ * OpenAI-compatible, Gemini, or Claude provider to draft candidate replies.
  *
  * The key is passed in per call; it is never logged.
  */
 class JevClient(
     private val decisionKey: String,
     private val replyModel: String,
-    private val decisionsUrl: String = "https://openrouter.ai/api/alpha/decisions",
-    private val decisionModel: String = "typesafe/jev-1.13",
-    private val chatKey: String = decisionKey,
-    private val chatUrl: String = "https://openrouter.ai/api/v1/chat/completions"
+    private val decisionsUrl: String = "https://api.typesafe.ai/v1/systemone",
+    private val decisionModel: String = "jev-latest",
+    private val chatKey: String,
+    private val chatUrl: String,
+    private val chatProtocol: String = "openai"
 ) {
 
     /** The 7 judgment questions only (fast, ~1s). No candidate generation. */
@@ -78,6 +78,17 @@ class JevClient(
         return a.copy(rankedReplies = ranked)
     }
 
+    /** Connectivity test that fails when either Jev or the text model fails. */
+    fun analyzeStrict(snapshot: ChatSnapshot, relationship: String): Analysis {
+        val a = judge(snapshot, relationship)
+        if (a.error != null) return a
+        return try {
+            a.copy(rankedReplies = draftAndRank(snapshot, relationship))
+        } catch (e: Exception) {
+            a.copy(error = readableError(e))
+        }
+    }
+
     /** Ask a generative model for exactly 3 varied candidate replies (Chinese). */
     private fun generateCandidates(snapshot: ChatSnapshot, relationship: String): List<String> {
         val convo = snapshot.messages.takeLast(10).joinToString("\n") {
@@ -87,16 +98,37 @@ class JevClient(
             "三条策略要有区别（例如：一条稳妥承接、一条给具体行动或承诺、一条简短低姿态）。" +
             "每条不超过 40 字，口语、自然、像真人在聊天软件里发消息。不要解释，不要加引号以外的内容，直接输出 JSON 数组。"
         val user = "关系：$relationship\n\n最近对话：\n$convo\n\n请给出 3 条候选回复。"
-        val messages = JSONArray()
-            .put(JSONObject().put("role", "system").put("content", sys))
-            .put(JSONObject().put("role", "user").put("content", user))
-        val body = JSONObject()
-            .put("model", replyModel)
-            .put("messages", messages)
-            .put("temperature", 0.8)
-        val resp = postJson(chatUrl, body, chatKey)
-        val content = resp.optJSONArray("choices")?.optJSONObject(0)
-            ?.optJSONObject("message")?.optString("content") ?: ""
+        require(replyModel.isNotBlank()) { "请先选择一个回复模型" }
+        require(chatUrl.isNotBlank()) { "请填写大语言模型请求地址" }
+        val content = when (chatProtocol) {
+            "gemini" -> {
+                val url = chatUrl.replace("{model}", replyModel)
+                val body = JSONObject().put("contents", JSONArray().put(JSONObject()
+                    .put("role", "user")
+                    .put("parts", JSONArray().put(JSONObject().put("text", "$sys\n\n$user")))))
+                    .put("generationConfig", JSONObject().put("temperature", 0.8))
+                val resp = postJson(url, body, chatKey, "gemini")
+                resp.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
+                    ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: ""
+            }
+            "claude" -> {
+                val body = JSONObject().put("model", replyModel).put("max_tokens", 500)
+                    .put("system", sys).put("messages", JSONArray().put(JSONObject()
+                        .put("role", "user").put("content", user)))
+                val resp = postJson(chatUrl, body, chatKey, "claude")
+                resp.optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: ""
+            }
+            else -> {
+                val messages = JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", sys))
+                    .put(JSONObject().put("role", "user").put("content", user))
+                val body = JSONObject().put("model", replyModel).put("messages", messages)
+                    .put("temperature", 0.8)
+                val resp = postJson(chatUrl, body, chatKey, "openai")
+                resp.optJSONArray("choices")?.optJSONObject(0)
+                    ?.optJSONObject("message")?.optString("content") ?: ""
+            }
+        }
         return parseThree(content)
     }
 
@@ -147,7 +179,7 @@ class JevClient(
     }
 
     /** POST JSON with one retry chain for 429/529 (exponential backoff). */
-    private fun postJson(urlStr: String, body: JSONObject, key: String): JSONObject {
+    private fun postJson(urlStr: String, body: JSONObject, key: String, protocol: String = "jev"): JSONObject {
         require(key.isNotBlank()) { "请填写对应接口的密钥" }
         require(URL(urlStr).let { it.protocol == "https" && !it.host.isNullOrBlank() && it.toURI().userInfo == null }) { "请求地址必须使用有效的 HTTPS URL" }
         var attempt = 0
@@ -160,10 +192,15 @@ class JevClient(
                     connectTimeout = 15000
                     readTimeout = 25000
                     doOutput = true
-                    setRequestProperty("Authorization", "Bearer $key")
                     setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("HTTP-Referer", "https://jev-assistant.local")
-                    setRequestProperty("X-Title", "Jev Assistant")
+                    when (protocol) {
+                        "gemini" -> setRequestProperty("x-goog-api-key", key)
+                        "claude" -> {
+                            setRequestProperty("x-api-key", key)
+                            setRequestProperty("anthropic-version", "2023-06-01")
+                        }
+                        else -> setRequestProperty("Authorization", "Bearer $key")
+                    }
                 }
                 val bytes = body.toString().toByteArray(Charsets.UTF_8)
                 conn.outputStream.use { os: OutputStream -> os.write(bytes) }
@@ -200,5 +237,47 @@ class JevClient(
         }
     }
 
-    companion object { private const val TAG = "JEVASSIST" }
+    companion object {
+        private const val TAG = "JEVASSIST"
+
+        /** Fetch model identifiers exposed by the configured provider. */
+        fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {
+            require(key.isNotBlank()) { "请先填写大语言模型 Key" }
+            require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
+            val listUrl = when (protocol) {
+                "gemini" -> requestUrl.substringBefore("/models/").trimEnd('/') + "/models"
+                "claude" -> requestUrl.substringBefore("/v1/") + "/v1/models"
+                else -> requestUrl.substringBefore("/chat/completions").trimEnd('/') + "/models"
+            }
+            val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"; connectTimeout = 15000; readTimeout = 25000
+                when (protocol) {
+                    "gemini" -> setRequestProperty("x-goog-api-key", key)
+                    "claude" -> {
+                        setRequestProperty("x-api-key", key)
+                        setRequestProperty("anthropic-version", "2023-06-01")
+                    }
+                    else -> setRequestProperty("Authorization", "Bearer $key")
+                }
+            }
+            try {
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
+                val root = JSONObject(text)
+                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
+                return (0 until arr.length()).mapNotNull { i ->
+                    val item = arr.optJSONObject(i) ?: return@mapNotNull null
+                    if (protocol == "gemini") {
+                        val methods = item.optJSONArray("supportedGenerationMethods")
+                        if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
+                            return@mapNotNull null
+                    }
+                    val raw = item.optString(if (protocol == "gemini") "name" else "id")
+                    raw?.removePrefix("models/")?.takeIf { it.isNotBlank() }
+                }.distinct().sorted()
+            } finally { conn.disconnect() }
+        }
+    }
 }

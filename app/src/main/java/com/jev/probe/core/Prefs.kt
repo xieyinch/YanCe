@@ -3,7 +3,7 @@ package com.jev.probe.core
 import android.content.Context
 
 /**
- * App-private config store. Holds the OpenRouter key, model choices, the
+ * App-private config store. Holds Jev and custom LLM credentials, model choices, the
  * relationship description used in Jev's state, and the conversation whitelist.
  *
  * Key handling: stored in app-private SharedPreferences (not world-readable,
@@ -14,50 +14,38 @@ class Prefs(context: Context) {
 
     private val sp = context.getSharedPreferences("jev_assistant", Context.MODE_PRIVATE)
 
-    var openRouterKey: String
-        get() = sp.getString(K_KEY, "") ?: ""
-        set(v) = sp.edit().putString(K_KEY, v.trim()).apply()
-
-    /** Generative model for drafting the 3 candidate replies (OpenRouter chat). */
+    /** Generative model for drafting the 3 candidate replies. */
     var replyModel: String
         get() = sp.getString(K_REPLY_MODEL, DEFAULT_REPLY_MODEL) ?: DEFAULT_REPLY_MODEL
         set(v) = sp.edit().putString(K_REPLY_MODEL, v.trim()).apply()
 
-    /** Judgment transport: OpenRouter, TypeSafe direct, or compatible custom endpoint. */
-    var decisionProvider: String
-        get() = sp.getString("decision_provider", "openrouter") ?: "openrouter"
-        set(v) = sp.edit().putString("decision_provider", v).apply()
+    /** Jev always uses TypeSafe's official System One endpoint. */
+    var jevKey: String
+        get() = (sp.getString("jev_key", "") ?: "").ifBlank {
+            sp.getString("decision_key", "")?.takeIf { it.isNotBlank() } ?: ""
+        }
+        set(v) = sp.edit().putString("jev_key", v.trim()).apply()
 
-    var decisionKey: String
-        get() = sp.getString("decision_key", "") ?: ""
-        set(v) = sp.edit().putString("decision_key", v.trim()).apply()
+    /** Custom text-generation provider: openai, gemini, or claude. */
+    var llmProtocol: String
+        get() = sp.getString("llm_protocol", "openai") ?: "openai"
+        set(v) = sp.edit().putString("llm_protocol", v).apply()
 
-    var decisionUrl: String
-        get() = sp.getString("decision_url", "") ?: ""
-        set(v) = sp.edit().putString("decision_url", v.trim()).apply()
-
-    var decisionModel: String
-        get() = sp.getString("decision_model", "") ?: ""
-        set(v) = sp.edit().putString("decision_model", v.trim()).apply()
+    var llmProviderName: String
+        get() = sp.getString("llm_provider_name", "自定义供应商") ?: "自定义供应商"
+        set(v) = sp.edit().putString("llm_provider_name", v.trim()).apply()
 
     var chatUrl: String
-        get() = sp.getString("chat_url", DEFAULT_CHAT_URL) ?: DEFAULT_CHAT_URL
+        get() = sp.getString("chat_url", "") ?: ""
         set(v) = sp.edit().putString("chat_url", v.trim()).apply()
 
     var chatKey: String
         get() = sp.getString("chat_key", "") ?: ""
         set(v) = sp.edit().putString("chat_key", v.trim()).apply()
 
-    fun effectiveDecisionKey(): String = decisionKey.ifBlank { openRouterKey }
-    fun effectiveChatKey(): String = chatKey.ifBlank { openRouterKey }
-    fun effectiveDecisionUrl(): String = when (decisionProvider) {
-        "official" -> "https://api.typesafe.ai/v1/systemone"
-        "custom" -> decisionUrl
-        else -> "https://openrouter.ai/api/alpha/decisions"
-    }
-    fun effectiveDecisionModel(): String = decisionModel.ifBlank {
-        if (decisionProvider == "official") "jev-latest" else "typesafe/jev-1.13"
-    }
+    var availableModels: Set<String>
+        get() = sp.getStringSet("available_models", emptySet()) ?: emptySet()
+        set(v) = sp.edit().putStringSet("available_models", v).apply()
 
     /** Free-text describing who the other person is; goes into Jev's state. */
     var relationship: String
@@ -104,10 +92,9 @@ class Prefs(context: Context) {
         return wl.any { title.contains(it) }
     }
 
-    fun hasKey(): Boolean = effectiveDecisionKey().isNotBlank()
+    fun hasKey(): Boolean = jevKey.isNotBlank() && chatKey.isNotBlank()
 
     companion object {
-        private const val K_KEY = "openrouter_key"
         private const val K_REPLY_MODEL = "reply_model"
         private const val K_REL = "relationship"
         private const val K_ENABLED = "enabled"
@@ -117,10 +104,9 @@ class Prefs(context: Context) {
         private const val K_BUBBLE_X = "bubble_x"
         private const val K_AUTO = "auto_analyze"
 
-        // Reply drafting model on OpenRouter. DeepSeek is region-available in CN,
-        // strong in Chinese, and cheap (Gemini/OpenAI are region-blocked here).
-        const val DEFAULT_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-        const val DEFAULT_REPLY_MODEL = "deepseek/deepseek-chat-v3.1"
+        const val JEV_URL = "https://api.typesafe.ai/v1/systemone"
+        const val JEV_MODEL = "jev-latest"
+        const val DEFAULT_REPLY_MODEL = ""
         const val DEFAULT_REL = "对方是我的伴侣；from=me 的是我发的，from=other 的是对方发的"
     }
 }
