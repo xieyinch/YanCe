@@ -443,6 +443,14 @@ class JevClient(
         var lastErr: Exception? = null
         while (attempt < 3) {
             try {
+                // Prefer the Android transport used by the original build. A
+                // number of relays reset OkHttp before sending any HTTP status.
+                try {
+                    return legacyPostJson(urlStr, body, key, protocol)
+                } catch (legacy: Exception) {
+                    lastErr = legacy
+                    AppLog.i("模型请求", "Android 原生连接失败，切换 OkHttp 备用通道")
+                }
                 val bytes = body.toString().toByteArray(Charsets.UTF_8)
                 val request = Request.Builder().url(urlStr)
                     .apply {
@@ -565,6 +573,14 @@ class JevClient(
             AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，Rikka 默认 HTTP/2 + 系统 DNS")
             repeat(5) { attempt ->
                 try {
+                    // Match the original Android implementation first; this
+                    // avoids waiting for an OkHttp socket that the relay resets.
+                    try {
+                        return legacyFetchModels(protocol, key, listUrl)
+                    } catch (legacy: Exception) {
+                        lastError = legacy
+                        AppLog.i("模型拉取", "Android 原生连接失败，切换 OkHttp 备用通道")
+                    }
                     val request = Request.Builder().url(listUrl)
                         .apply {
                             when (protocol) {
