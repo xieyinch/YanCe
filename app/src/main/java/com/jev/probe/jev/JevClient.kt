@@ -517,10 +517,10 @@ class JevClient(
             userAgent: String = ""
         ): OkHttpClient {
             val builder = OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.MINUTES)
                 .writeTimeout(120, TimeUnit.SECONDS)
-                .callTimeout(75, TimeUnit.SECONDS)
+                .callTimeout(180, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .followRedirects(true)
                 .followSslRedirects(true)
@@ -665,8 +665,8 @@ class JevClient(
         private fun legacyFetchModels(protocol: String, key: String, listUrl: String, userAgent: String): List<String> {
             val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 20_000
-                readTimeout = 30_000
+                connectTimeout = 60_000
+                readTimeout = 180_000
                 useCaches = false
                 instanceFollowRedirects = true
                 setRequestProperty("Accept", "application/json")
@@ -708,7 +708,7 @@ class JevClient(
             val bytes = body.toString().toByteArray(Charsets.UTF_8)
             val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 20_000
+                connectTimeout = 60_000
                 readTimeout = 120_000
                 doInput = true
                 doOutput = true
