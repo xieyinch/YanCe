@@ -591,7 +591,7 @@ class JevClient(
                 }
             }
             var lastError: Exception? = null
-            AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，IPv4 优先 + HTTP/1.1")
+            AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，Rikka 默认 HTTP/2 + 系统 DNS")
             repeat(5) { attempt ->
                 try {
                     val request = Request.Builder().url(listUrl)
