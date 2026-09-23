@@ -43,22 +43,6 @@ class Prefs(context: Context) {
         get() = sp.getString("chat_key", "") ?: ""
         set(v) = sp.edit().putString("chat_key", v.trim()).apply()
 
-    /** Optional network overrides, matching RikkaHub's provider network settings. */
-    var networkUserAgent: String
-        get() = sp.getString("network_user_agent", "") ?: ""
-        set(v) = sp.edit().putString("network_user_agent", v.trim()).apply()
-
-    var proxyUrl: String
-        get() = sp.getString("proxy_url", "") ?: ""
-        set(v) = sp.edit().putString("proxy_url", v.trim()).apply()
-
-    var proxyUsername: String
-        get() = sp.getString("proxy_username", "") ?: ""
-        set(v) = sp.edit().putString("proxy_username", v.trim()).apply()
-
-    var proxyPassword: String
-        get() = sp.getString("proxy_password", "") ?: ""
-        set(v) = sp.edit().putString("proxy_password", v).apply()
 
     var availableModels: Set<String>
         get() = sp.getStringSet("available_models", emptySet()) ?: emptySet()

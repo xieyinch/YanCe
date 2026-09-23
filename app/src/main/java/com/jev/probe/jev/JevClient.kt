@@ -10,14 +10,10 @@ import com.jev.probe.core.Score
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.InetSocketAddress
 import java.net.HttpURLConnection
-import java.net.Proxy
-import java.net.URI
 import java.net.URL
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -35,14 +31,10 @@ class JevClient(
     private val replyModel: String,
     private val chatKey: String,
     private val chatUrl: String,
-    private val chatProtocol: String = "openai",
-    proxyUrl: String = "",
-    proxyUsername: String = "",
-    proxyPassword: String = "",
-    userAgent: String = ""
+    private val chatProtocol: String = "openai"
 ) {
 
-    private val http = buildHttp(proxyUrl, proxyUsername, proxyPassword, userAgent)
+    private val http = buildHttp()
 
     private data class Coaching(
         val emotion: String? = null,
@@ -510,12 +502,7 @@ class JevClient(
         private const val decisionsUrl = "https://api.typesafe.ai/v1/systemone"
         private const val decisionModel = "jev-latest"
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
-        private fun buildHttp(
-            proxyUrl: String = "",
-            proxyUsername: String = "",
-            proxyPassword: String = "",
-            userAgent: String = ""
-        ): OkHttpClient {
+        private fun buildHttp(): OkHttpClient {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.MINUTES)
@@ -528,11 +515,7 @@ class JevClient(
                     val original = chain.request()
                     val request = original.newBuilder()
                         .header("Accept-Language", Locale.getDefault().toLanguageTag())
-                        .apply {
-                            if (original.header("User-Agent") == null) {
-                                header("User-Agent", userAgent.ifBlank { "RikkaHub-Android/2.5.3" })
-                            }
-                        }.build()
+                        .build()
                     chain.proceed(request)
                 }
                 .addNetworkInterceptor { chain ->
@@ -544,42 +527,19 @@ class JevClient(
                     } else chain.proceed(request)
                 }
 
-            parseProxy(proxyUrl)?.let { proxy ->
-                builder.proxy(proxy)
-                if (proxyUsername.isNotBlank()) {
-                    builder.proxyAuthenticator { _, response ->
-                        val credential = Credentials.basic(proxyUsername, proxyPassword)
-                        if (response.request.header("Proxy-Authorization") == credential) null
-                        else response.request.newBuilder().header("Proxy-Authorization", credential).build()
-                    }
-                }
-            }
             return builder.build()
-        }
-
-        private fun parseProxy(value: String): Proxy? {
-            if (value.isBlank()) return null // OkHttp uses Android's system ProxySelector.
-            val uri = URI(value.trim())
-            require(uri.host != null && uri.port in 1..65535) { "代理格式应为 http://主机:端口 或 socks5://主机:端口" }
-            val type = if (uri.scheme.equals("socks5", true) || uri.scheme.equals("socks", true))
-                Proxy.Type.SOCKS else Proxy.Type.HTTP
-            return Proxy(type, InetSocketAddress.createUnresolved(uri.host, uri.port))
         }
 
         /** Fetch model identifiers exposed by the configured provider. */
         fun fetchModels(
             protocol: String,
             key: String,
-            requestUrl: String,
-            proxyUrl: String = "",
-            proxyUsername: String = "",
-            proxyPassword: String = "",
-            userAgent: String = ""
+            requestUrl: String
         ): List<String> {
             require(key.isNotBlank()) { "请先填写大语言模型 Key" }
             require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
             val normalized = requestUrl.trim().trimEnd('/')
-            val http = buildHttp(proxyUrl, proxyUsername, proxyPassword, userAgent)
+            val http = buildHttp()
             val listUrl = when (protocol) {
                 "gemini" -> when {
                     normalized.contains("/models/") -> normalized.substringBefore("/models/") + "/models"
@@ -648,7 +608,7 @@ class JevClient(
                     // Android transport (Connection: close + fixed-length GET).
                     try {
                         AppLog.i("模型拉取", "OkHttp 连接被重置，切换 Android 原生连接")
-                        return legacyFetchModels(protocol, key, listUrl, userAgent)
+                        return legacyFetchModels(protocol, key, listUrl)
                     } catch (legacy: Exception) {
                         lastError = legacy
                     }
@@ -662,7 +622,7 @@ class JevClient(
             throw RuntimeException("连接连续重试 5 次仍失败：$detail")
         }
 
-        private fun legacyFetchModels(protocol: String, key: String, listUrl: String, userAgent: String): List<String> {
+        private fun legacyFetchModels(protocol: String, key: String, listUrl: String): List<String> {
             val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 60_000
@@ -673,7 +633,6 @@ class JevClient(
                 setRequestProperty("Accept-Encoding", "identity")
                 setRequestProperty("Cache-Control", "no-cache")
                 setRequestProperty("Connection", "close")
-                setRequestProperty("User-Agent", userAgent.ifBlank { "YanCe/1.2 (Android; model-discovery)" })
                 when (protocol) {
                     "gemini" -> setRequestProperty("x-goog-api-key", key)
                     "claude" -> {
@@ -719,7 +678,6 @@ class JevClient(
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Accept-Encoding", "identity")
                 setRequestProperty("Connection", "close")
-                setRequestProperty("User-Agent", "YanCe/1.2 (Android)")
                 when (protocol) {
                     "gemini" -> setRequestProperty("x-goog-api-key", key)
                     "claude" -> {
