@@ -327,6 +327,10 @@ class OverlayController(private val ctx: Context) {
         panel?.background = card(18, panelBg(), stroke = true) // re-apply in case opacity changed
         val views = ArrayList<View>()
 
+        if (a.safetyLevel != "normal") {
+            views.add(safetyBanner(a.safetyLevel, a.safetySignals, a.safetyAdvice))
+        }
+
         a.emotionSupport?.let {
             views.add(line(it, "#171A3A", 14f, true))
             views.add(divider())
@@ -352,6 +356,8 @@ class OverlayController(private val ctx: Context) {
         a.tensionResolved?.let { if (it >= 0.7) views.add(line("✓ 紧张已缓解", "#16A34A", 12f)) }
 
         a.roundGoal?.let { views.add(tagLine("本轮目标", it)) }
+        a.reciprocityState?.let { views.add(detailBlock("互惠状态", RECIPROCITY[it] ?: it)) }
+        a.conflictType?.takeUnless { it == "none" }?.let { views.add(detailBlock("冲突类型", CONFLICT[it] ?: it)) }
         if (a.facts.isNotEmpty()) views.add(detailBlock("能确认", a.facts.joinToString("；")))
         a.inference?.let { views.add(detailBlock("暂时推测", it)) }
         a.unknown?.let { views.add(detailBlock("仍不知道", it)) }
@@ -456,6 +462,20 @@ class OverlayController(private val ctx: Context) {
         }
     }
 
+    private fun safetyBanner(level: String, signals: List<String>, advice: String?): View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        val danger = level == "danger"
+        background = card(14, if (danger) Color.parseColor("#FFF0F1") else Color.parseColor("#FFF7E8"))
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        addView(line(if (danger) "⚠ 检测到明确安全风险" else "⚠ 建议先确认安全", if (danger) "#B42335" else "#A15C00", 14f, true))
+        if (signals.isNotEmpty()) addView(line("原文信号：${signals.joinToString("；")}", "#4B526F", 12f))
+        advice?.let { addView(line(it, "#171A3A", 12f, true)) }
+        if (danger) addView(line("如有现实危险，请优先离开现场并联系可信人员、110 或 120。", "#B42335", 12f, true))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        }
+    }
+
     private fun detailBlock(label: String, value: String) = TextView(ctx).apply {
         text = "$label｜$value"; textSize = 12f; setTextColor(Color.parseColor("#4B526F"))
         setPadding(0, dp(5), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
@@ -522,5 +542,12 @@ class OverlayController(private val ctx: Context) {
             "check_history" to "翻聊天记录", "apologize" to "先道歉", "give_commitment" to "给承诺",
             "explain" to "解释清楚", "acknowledge" to "接住情绪", "say_less" to "少说两句",
             "make_plan" to "定个安排")
+        private val RECIPROCITY = mapOf(
+            "mutual" to "双方有来有回", "insufficient" to "证据还不够",
+            "imbalanced" to "持续投入失衡", "rejected" to "对方已明确拒绝", "danger" to "存在安全风险")
+        private val CONFLICT = mapOf(
+            "misunderstanding" to "信息误解", "solvable" to "可解决问题",
+            "persistent_difference" to "持续差异", "core_incompatibility" to "核心不兼容",
+            "power_safety" to "权力或安全问题")
     }
 }

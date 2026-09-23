@@ -30,6 +30,8 @@ class RelationshipMemory(context: Context) {
         analysis.roundGoal?.let { parts += "本轮目标：$it" }
         analysis.nextStep?.let { parts += "下一步：$it" }
         analysis.stopCondition?.let { parts += "停止条件：$it" }
+        analysis.reciprocityState?.let { parts += "互惠状态：$it" }
+        analysis.conflictType?.takeUnless { it == "none" }?.let { parts += "冲突类型：$it" }
         if (parts.isEmpty()) return
 
         val summary = parts.joinToString("｜").replace(Regex("\\s+"), " ").take(MAX_EVENT_CHARS)

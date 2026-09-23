@@ -42,7 +42,12 @@ class JevClient(
         val stopCondition: String? = null,
         val positive: String? = null,
         val ambiguous: String? = null,
-        val negative: String? = null
+        val negative: String? = null,
+        val safetyLevel: String = "normal",
+        val safetySignals: List<String> = emptyList(),
+        val safetyAdvice: String? = null,
+        val reciprocity: String? = null,
+        val conflictType: String? = null
     )
 
     private var latestCoaching = Coaching()
@@ -105,7 +110,12 @@ class JevClient(
         stopCondition = latestCoaching.stopCondition,
         positiveBranch = latestCoaching.positive,
         ambiguousBranch = latestCoaching.ambiguous,
-        negativeBranch = latestCoaching.negative
+        negativeBranch = latestCoaching.negative,
+        safetyLevel = latestCoaching.safetyLevel,
+        safetySignals = latestCoaching.safetySignals,
+        safetyAdvice = latestCoaching.safetyAdvice,
+        reciprocityState = latestCoaching.reciprocity,
+        conflictType = latestCoaching.conflictType
     )
 
     /** Convenience for the settings connectivity test: judge + replies, sequential. */
@@ -151,12 +161,19 @@ class JevClient(
                 "emotion为对用户的1句情绪承接；facts为最多3条原文可确认事实；inference为1条暂定解释；" +
                 "unknown为1条关键未知；goal只能是承接、降压、调侃、轻推、约见、澄清、收线之一；" +
                 "next_step为现在能做的小动作；stop_condition为停止或改策略的条件；" +
+                "safety_level只能是normal、caution、danger；只有原文出现暴力、胁迫、跟踪、限制自由、" +
+                "性强迫、隐私威胁、经济控制或自伤伤人要挟等明确信号时才能提高；safety_signals列出原文证据；" +
+                "safety_advice给低风险行动，danger时禁止推进、挽回或单独见面；" +
+                "reciprocity只能是mutual、insufficient、imbalanced、rejected、danger之一；" +
+                "conflict_type只能是none、misunderstanding、solvable、persistent_difference、core_incompatibility、power_safety之一；" +
                 "branches包含positive、ambiguous、negative三种后续动作；replies为恰好3条可直接发送、策略不同的中文回复。格式：" +
                 "{\"true_intent\":\"casual_chat\",\"danger_level\":0,\"need\":\"nothing\"," +
                 "\"best_action\":\"acknowledge\",\"should_reply_now\":true," +
                 "\"tension_resolved\":true,\"literal_question\":true,\"emotion\":\"...\",\"facts\":[\"...\"]," +
                 "\"inference\":\"...\",\"unknown\":\"...\",\"goal\":\"承接\",\"next_step\":\"...\"," +
-                "\"stop_condition\":\"...\",\"branches\":{\"positive\":\"...\",\"ambiguous\":\"...\",\"negative\":\"...\"}," +
+                "\"stop_condition\":\"...\",\"safety_level\":\"normal\",\"safety_signals\":[],\"safety_advice\":\"...\"," +
+                "\"reciprocity\":\"insufficient\",\"conflict_type\":\"none\"," +
+                "\"branches\":{\"positive\":\"...\",\"ambiguous\":\"...\",\"negative\":\"...\"}," +
                 "\"replies\":[\"...\",\"...\",\"...\"]}"
             val root = parseObject(callChat(system, user))
             val replies = parseReplyArray(root.optJSONArray("replies"))
@@ -183,7 +200,12 @@ class JevClient(
                 stopCondition = latestCoaching.stopCondition,
                 positiveBranch = latestCoaching.positive,
                 ambiguousBranch = latestCoaching.ambiguous,
-                negativeBranch = latestCoaching.negative
+                negativeBranch = latestCoaching.negative,
+                safetyLevel = latestCoaching.safetyLevel,
+                safetySignals = latestCoaching.safetySignals,
+                safetyAdvice = latestCoaching.safetyAdvice,
+                reciprocityState = latestCoaching.reciprocity,
+                conflictType = latestCoaching.conflictType
             )
         } catch (e: Exception) {
             AppLog.e("大模型独立分析", "请求或JSON解析失败", e)
@@ -304,13 +326,19 @@ class JevClient(
             "4.明确拒绝、不适或持续缺乏回应时，不设计施压、纠缠、贬低、试探或操控话术；" +
             "5.信息不足时选择澄清或简短承接，不假装记得、不虚构理由；" +
             "6.避免替用户做重大决定或过度承诺。" +
-            "先提取：emotion一句情绪承接；facts最多3条原文事实；inference一条暂定推测；unknown一条关键未知；" +
+            "先做安全筛查：只有聊天原文明示暴力、限制自由、跟踪、性强迫、隐私威胁、经济控制、" +
+            "自伤或伤人要挟时，safety_level才为caution或danger，并在safety_signals引用简短证据。" +
+            "danger时回复只能用于停止升级、确认安全或寻求支持，不得推进关系、挽回、挑衅或建议单独摊牌。" +
+            "再提取：emotion一句情绪承接；facts最多3条原文事实；inference一条暂定推测；unknown一条关键未知；" +
             "goal只选承接、降压、调侃、轻推、约见、澄清、收线之一；next_step一个小动作；stop_condition停止条件；" +
+            "reciprocity只选mutual、insufficient、imbalanced、rejected、danger，证据不足不得判失衡；" +
+            "conflict_type只选none、misunderstanding、solvable、persistent_difference、core_incompatibility、power_safety；" +
             "branches给出positive、ambiguous、negative三种回应下各一个后续动作。" +
             "再生成含且仅含3条可以直接发送的中文回复：" +
             "第一条稳妥共情并承接核心需求；第二条在事实充分时给具体行动，否则礼貌澄清；" +
             "第三条简短自然并保留双方空间。三条策略必须不同，每条不超过50字，像真人聊天。" +
-            "只输出JSON对象，字段为emotion、facts、inference、unknown、goal、next_step、stop_condition、branches、replies。" +
+            "只输出JSON对象，字段为emotion、facts、inference、unknown、goal、next_step、stop_condition、" +
+            "safety_level、safety_signals、safety_advice、reciprocity、conflict_type、branches、replies。" +
             "不要输出Markdown。"
 
     private fun parseCoaching(root: JSONObject): Coaching {
@@ -319,13 +347,20 @@ class JevClient(
         val facts = if (factArray == null) emptyList() else (0 until factArray.length())
             .map { factArray.optString(it).trim() }.filter { it.isNotBlank() }.take(3)
         val branches = root.optJSONObject("branches")
+        val signalArray = root.optJSONArray("safety_signals")
+        val signals = if (signalArray == null) emptyList() else (0 until signalArray.length())
+            .map { signalArray.optString(it).trim() }.filter { it.isNotBlank() }.take(3)
+        val safeLevel = root.optString("safety_level", "normal").takeIf { it in setOf("normal", "caution", "danger") } ?: "normal"
         return Coaching(
             emotion = value("emotion"), facts = facts, inference = value("inference"),
             unknown = value("unknown"), goal = value("goal"), nextStep = value("next_step"),
             stopCondition = value("stop_condition"),
             positive = branches?.optString("positive")?.trim()?.takeIf { it.isNotBlank() },
             ambiguous = branches?.optString("ambiguous")?.trim()?.takeIf { it.isNotBlank() },
-            negative = branches?.optString("negative")?.trim()?.takeIf { it.isNotBlank() }
+            negative = branches?.optString("negative")?.trim()?.takeIf { it.isNotBlank() },
+            safetyLevel = safeLevel, safetySignals = signals, safetyAdvice = value("safety_advice"),
+            reciprocity = root.optString("reciprocity").takeIf { it in setOf("mutual", "insufficient", "imbalanced", "rejected", "danger") },
+            conflictType = root.optString("conflict_type").takeIf { it in setOf("none", "misunderstanding", "solvable", "persistent_difference", "core_incompatibility", "power_safety") }
         )
     }
 

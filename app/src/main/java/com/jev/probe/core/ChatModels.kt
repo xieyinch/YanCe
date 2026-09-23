@@ -37,7 +37,12 @@ data class Analysis(
     val stopCondition: String? = null,
     val positiveBranch: String? = null,
     val ambiguousBranch: String? = null,
-    val negativeBranch: String? = null
+    val negativeBranch: String? = null,
+    val safetyLevel: String = "normal",
+    val safetySignals: List<String> = emptyList(),
+    val safetyAdvice: String? = null,
+    val reciprocityState: String? = null,
+    val conflictType: String? = null
 )
 
 data class Choice(val choice: String, val confidence: Double, val probabilities: Map<String, Double>)
