@@ -24,11 +24,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: bash gradlew :app:assembleDebug
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk jev-chat-assistant-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk yance-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: jev-assistant-debug
-          path: jev-chat-assistant-debug.apk
+          name: yance-debug
+          path: yance-debug.apk
           if-no-files-found: error
       - name: Publish APK to GitHub Releases
         if: github.event_name != 'pull_request'
@@ -36,9 +36,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: debug-${{ github.run_number }}
         run: |
-          gh release create "$RELEASE_TAG" jev-chat-assistant-debug.apk \
+          gh release create "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
-            --title "Jev Chat Assistant Debug #${{ github.run_number }}" \
-            --notes "自动构建的 Android 调试版 APK。提交：${{ github.sha }}" \
+            --title "言策 Debug #${{ github.run_number }}" \
+            --notes "自动构建的言策 Android 调试版 APK。提交：${{ github.sha }}" \
             --prerelease
+          gh release upload "$RELEASE_TAG" yance-debug.apk \
+            --repo "${{ github.repository }}" \
+            --clobber

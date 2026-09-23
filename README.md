@@ -22,7 +22,7 @@
 
 ## 下载
 
-前往 [Releases](https://github.com/xieyinch/YanCe/releases) 下载最新的 **jev-chat-assistant-debug.apk**。
+前往 [Releases](https://github.com/xieyinch/YanCe/releases) 下载最新的 **yance-debug.apk**。
 
 当前提供的是自动构建的调试版本。如果系统提示签名不一致，需要先卸载旧版本；卸载应用会同时清除已经保存的密钥和设置。
 
