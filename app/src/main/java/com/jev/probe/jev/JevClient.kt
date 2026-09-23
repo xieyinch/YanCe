@@ -10,9 +10,13 @@ import com.jev.probe.core.Score
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Dns
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.net.Inet4Address
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +33,8 @@ class JevClient(
     private val chatUrl: String,
     private val chatProtocol: String = "openai"
 ) {
+
+    private data class HttpResult(val code: Int, val text: String, val fallback: Boolean)
 
     private data class Coaching(
         val emotion: String? = null,
@@ -453,15 +459,15 @@ class JevClient(
                     }
                     .post(bytes.toRequestBody(JSON_MEDIA_TYPE, 0, bytes.size))
                     .build()
-                HTTP.newCall(request).execute().use { response ->
+                executeProviderRequest(request).let { response ->
                     val code = response.code
-                    val text = response.body?.string().orEmpty()
+                    val text = response.text
                     if (code == 429 || code == 529) {
                         attempt++
                         Thread.sleep(500L * (1L shl attempt))
-                        return@use
+                        return@let
                     }
-                    if (!response.isSuccessful) throw RuntimeException("HTTP $code: ${text.take(160)}")
+                    if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
                     return JSONObject(text)
                 }
             } catch (e: Exception) {
@@ -491,7 +497,7 @@ class JevClient(
         private const val decisionModel = "jev-latest"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val HTTP = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .callTimeout(75, TimeUnit.SECONDS)
@@ -499,6 +505,38 @@ class JevClient(
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
+        private val IPV4_FIRST_DNS = Dns { hostname ->
+            Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
+        }
+        private val HTTP1_IPV4 = HTTP.newBuilder()
+            .dns(IPV4_FIRST_DNS)
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .retryOnConnectionFailure(true)
+            .build()
+
+        /**
+         * Android networks sometimes advertise working IPv6 while the provider/CDN's IPv6 path
+         * resets during TLS. Retry once through an IPv4-first HTTP/1.1 route, matching the most
+         * broadly compatible curl/desktop-client behaviour.
+         */
+        private fun executeProviderRequest(request: Request): HttpResult {
+            try {
+                HTTP.newCall(request).execute().use { response ->
+                    return HttpResult(response.code, response.body?.string().orEmpty(), false)
+                }
+            } catch (primary: IOException) {
+                AppLog.i("网络兼容", "常规连接失败，切换 IPv4 优先 + HTTP/1.1：${primary.javaClass.simpleName}")
+                try {
+                    HTTP1_IPV4.newCall(request).execute().use { response ->
+                        AppLog.i("网络兼容", "兼容通道连接成功，HTTP ${response.code}")
+                        return HttpResult(response.code, response.body?.string().orEmpty(), true)
+                    }
+                } catch (fallback: IOException) {
+                    fallback.addSuppressed(primary)
+                    throw fallback
+                }
+            }
+        }
 
         /** Fetch model identifiers exposed by the configured provider. */
         fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {
@@ -544,10 +582,10 @@ class JevClient(
                             }
                         }
                         .get().build()
-                    HTTP.newCall(request).execute().use { response ->
+                    executeProviderRequest(request).let { response ->
                         val code = response.code
-                        val text = response.body?.string().orEmpty()
-                        if (!response.isSuccessful) {
+                        val text = response.text
+                        if (code !in 200..299) {
                             val error = RuntimeException("HTTP $code: ${text.take(160)}")
                             if (code in 400..499 && code != 408 && code != 429) throw error
                             lastError = error
