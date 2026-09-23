@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
     private fun build() {
         container.removeAllViews()
 
-        container.addView(text("Jev 聊天助手", 24f, ink, bold = true))
+        container.addView(text("言策", 24f, ink, bold = true))
         container.addView(text("在聊天 App 旁读对方消息（已支持微信、QQ、X、飞书），给出判断和候选回复。发送始终由你手动点。",
             13f, sub).apply { setPadding(0, dp(6), 0, dp(16)) })
 
