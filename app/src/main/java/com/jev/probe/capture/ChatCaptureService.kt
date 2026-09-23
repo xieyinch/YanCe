@@ -142,20 +142,25 @@ open class ChatCaptureService : AccessibilityService() {
             prefs.chatKey, prefs.chatUrl, prefs.llmProtocol, prefs.analysisMode
         )
         val rel = prefs.relationship
-        // Judgment is fast (~1s) — show it immediately.
+        val requestSignature = snapshot.signature()
+        // Run in one ordered task: Jev judgment -> LLM drafting -> Jev ranking.
+        // This prevents the drafting model from guessing the situation without Jev's result.
         submit {
             val judgment = client.judge(snapshot, rel)
             main.post {
                 if (judgment.error != null) { analyzing = false; overlay?.showError(judgment.error) }
                 else overlay?.showJudgment(judgment)
             }
-        }
-        // Candidate replies are slower (generative + rank) — fill in when ready.
-        submit {
-            val ranked = try { client.draftAndRank(snapshot, rel) } catch (e: Exception) { emptyList() }
+            if (judgment.error != null) return@submit
+            val ranked = try { client.draftAndRank(snapshot, rel, judgment) } catch (e: Exception) { emptyList() }
             main.post {
                 analyzing = false
-                overlay?.showReplies(ranked) { text -> fillInput(text) }
+                // Do not display replies generated for a conversation that changed mid-request.
+                if (currentSnapshot?.signature() == requestSignature) {
+                    overlay?.showReplies(ranked) { text -> fillInput(text) }
+                } else {
+                    overlay?.showIdle(currentSnapshot?.title)
+                }
             }
         }
     }

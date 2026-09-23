@@ -59,8 +59,12 @@ class JevClient(
     }
 
     /** Draft 3 candidate replies (generative model) then Jev-rank them. Slower. */
-    fun draftAndRank(snapshot: ChatSnapshot, relationship: String): List<RankedReply> {
-        val candidates = generateCandidates(snapshot, relationship)
+    fun draftAndRank(
+        snapshot: ChatSnapshot,
+        relationship: String,
+        judgment: Analysis
+    ): List<RankedReply> {
+        val candidates = generateCandidates(snapshot, relationship, judgment)
         val questions = JSONObject().put("best_reply",
             JevQuestions.rankQuestion(candidates).getJSONObject("best_reply"))
         val body = JSONObject()
@@ -75,7 +79,7 @@ class JevClient(
     fun analyze(snapshot: ChatSnapshot, relationship: String): Analysis {
         val a = judge(snapshot, relationship)
         if (a.error != null) return a
-        val ranked = try { draftAndRank(snapshot, relationship) } catch (e: Exception) { emptyList() }
+        val ranked = try { draftAndRank(snapshot, relationship, a) } catch (e: Exception) { emptyList() }
         return a.copy(rankedReplies = ranked)
     }
 
@@ -84,19 +88,26 @@ class JevClient(
         val a = judge(snapshot, relationship)
         if (a.error != null) return a
         return try {
-            a.copy(rankedReplies = draftAndRank(snapshot, relationship))
+            a.copy(rankedReplies = draftAndRank(snapshot, relationship, a))
         } catch (e: Exception) {
             a.copy(error = readableError(e))
         }
     }
 
     /** Ask a generative model for exactly 3 varied candidate replies (Chinese). */
-    private fun generateCandidates(snapshot: ChatSnapshot, relationship: String): List<String> {
+    private fun generateCandidates(
+        snapshot: ChatSnapshot,
+        relationship: String,
+        judgment: Analysis
+    ): List<String> {
         val convo = snapshot.messages.takeLast(10).joinToString("\n") {
             (if (it.side == "me") "我" else "对方") + "：" + it.text
         }
         val sys = if (analysisMode == "relationship") relationshipCoachPrompt else generalPrompt
-        val user = "关系：$relationship\n\n最近对话：\n$convo\n\n请给出 3 条候选回复。"
+        val jevContext = buildJevContext(judgment)
+        val user = "关系：$relationship\n\n最近对话：\n$convo\n\nJev结构化判断：\n$jevContext\n\n" +
+            "请以聊天原文为事实边界，并参考Jev判断给出3条候选回复。Jev判断只是辅助，" +
+            "若它与原文明显冲突，应以原文为准。"
         require(replyModel.isNotBlank()) { "请先选择一个回复模型" }
         require(chatUrl.isNotBlank()) { "请填写大语言模型请求地址" }
         val content = when (chatProtocol) {
@@ -129,6 +140,27 @@ class JevClient(
             }
         }
         return parseThree(content)
+    }
+
+    private fun buildJevContext(a: Analysis): String = listOf(
+        "真实意图=${a.trueIntent?.choice ?: "unknown"}，置信度=${formatConfidence(a.trueIntent?.confidence)}",
+        "关系风险=${a.dangerLevel?.score?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "unknown"}/${a.dangerLevel?.maxLevel ?: 9}",
+        "当前需求=${a.sheNeeds?.choice ?: "unknown"}，置信度=${formatConfidence(a.sheNeeds?.confidence)}",
+        "建议动作=${a.bestAction?.choice ?: "unknown"}，置信度=${formatConfidence(a.bestAction?.confidence)}",
+        "需要实质回复=${formatNoul(a.shouldReplyNow)}",
+        "紧张已缓解=${formatNoul(a.tensionResolved)}",
+        "纯字面表达=${formatNoul(a.literalQuestion)}"
+    ).joinToString("\n")
+
+    private fun formatConfidence(value: Double?): String = value?.let {
+        String.format(java.util.Locale.US, "%.2f", it)
+    } ?: "unknown"
+
+    private fun formatNoul(value: Double?): String = when {
+        value == null || value.isNaN() -> "unknown"
+        value >= 0.65 -> "yes"
+        value <= 0.35 -> "no"
+        else -> "uncertain"
     }
 
     private val generalPrompt: String

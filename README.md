@@ -51,7 +51,7 @@
 
 - **采集**：一个 App 一个适配器（`app/src/main/java/com/jev/probe/capture/ChatAppAdapter.kt`），服务按前台包名分发；适配器只负责把当前窗口变成「标题 + 消息列表（谁说的、说了什么）」，下游判断 / 悬浮窗 / 填入全部通用。微信适配器读聊天气泡（`com.tencent.mm:id/bkl`），按气泡位置判断谁说的；QQ 适配器读正文节点（`com.tencent.mobileqq:id/mjn`，QQ 不混淆节点），标题取 `id/371`，按气泡哪边贴着头像列判断谁说的；X 适配器面对的是 Compose 界面，消息节点没有 id、正文也不在 text 里，只能解析 content-desc（`发件人：正文。8:11 上午。Read。`）——按全角冒号切出发件人、再从末尾剥掉时间和已读标记，谁说的看发件人是不是「你」。微信 8.0.52+ 对普通无障碍服务混淆节点，所以服务类名伪装成系统的 `com.google.android.accessibility.selecttospeak.SelectToSpeakService` 才能读到（实测微信 8.0.78 有效）。
 - **判断**：[Jev](https://docs.typesafe.ai/)（System One 判断模型）只回答选择/打分/是非，一次请求发全部题目，约 1 秒返回。
-- **回复**：生成式模型（默认 DeepSeek）起草 3 条候选，Jev 排序。
+- **回复**：Jev 先输出意图、风险、需求和建议动作；生成式模型依据这些结构化判断起草 3 条候选，再由 Jev 排序。若聊天在请求期间发生变化，旧候选会被丢弃，避免串话。
 - **回填**：`ACTION_SET_TEXT` / 剪贴板 `ACTION_PASTE` 把选中的回复填进输入框，**不发送**。
 
 ## 适配一个新的聊天 App
