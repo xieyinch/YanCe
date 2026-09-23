@@ -4,6 +4,7 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 // Release signing: reads a properties file kept OUTSIDE the repo
@@ -18,7 +19,7 @@ val releaseProps = Properties().apply {
 
 android {
     namespace = "com.jev.probe"
-    compileSdk = 37
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.jev.probe"
@@ -51,11 +52,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
 }
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
-    // Keep the same Android OkHttp artifact/version as RikkaHub. Do not replace
-    // this with okhttp-jvm: the Android artifact carries platform TLS behavior.
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    // Android-native OkHttp. RikkaHub 5.5.0 requires the unavailable API 37;
+    // 4.12 keeps the same Android TLS/platform integration on public API 35.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
