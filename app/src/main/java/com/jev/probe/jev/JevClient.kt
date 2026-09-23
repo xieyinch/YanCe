@@ -27,7 +27,8 @@ class JevClient(
     private val decisionModel: String = "jev-latest",
     private val chatKey: String,
     private val chatUrl: String,
-    private val chatProtocol: String = "openai"
+    private val chatProtocol: String = "openai",
+    private val analysisMode: String = "relationship"
 ) {
 
     /** The 7 judgment questions only (fast, ~1s). No candidate generation. */
@@ -94,9 +95,7 @@ class JevClient(
         val convo = snapshot.messages.takeLast(10).joinToString("\n") {
             (if (it.side == "me") "我" else "对方") + "：" + it.text
         }
-        val sys = "你是中文即时通讯回复助手。只输出一个 JSON 数组，含且仅含 3 条候选回复文本，" +
-            "三条策略要有区别（例如：一条稳妥承接、一条给具体行动或承诺、一条简短低姿态）。" +
-            "每条不超过 40 字，口语、自然、像真人在聊天软件里发消息。不要解释，不要加引号以外的内容，直接输出 JSON 数组。"
+        val sys = if (analysisMode == "relationship") relationshipCoachPrompt else generalPrompt
         val user = "关系：$relationship\n\n最近对话：\n$convo\n\n请给出 3 条候选回复。"
         require(replyModel.isNotBlank()) { "请先选择一个回复模型" }
         require(chatUrl.isNotBlank()) { "请填写大语言模型请求地址" }
@@ -131,6 +130,27 @@ class JevClient(
         }
         return parseThree(content)
     }
+
+    private val generalPrompt: String
+        get() = "你是中文即时通讯回复助手。只输出一个 JSON 数组，含且仅含 3 条候选回复文本。" +
+            "三条策略要有区别：稳妥承接、具体行动、简短自然。每条不超过40字，口语化，" +
+            "不编造聊天里没有的事实，不自动替用户作出承诺。不要解释，直接输出 JSON 数组。"
+
+    /**
+     * A compact, original relationship-coaching workflow inspired by evidence-aware
+     * communication practice. It intentionally does not embed third-party documents.
+     */
+    private val relationshipCoachPrompt: String
+        get() = "你是谨慎、清醒的中文关系沟通助手。先在内部完成判断，再只输出结果。" +
+            "判断时必须：1.先识别对方情绪和真正需求；2.严格区分聊天能确认的事实、合理推测和未知，" +
+            "禁止读心；3.优先考虑互惠、可靠性、边界、现实可行性和长期信任；" +
+            "4.明确拒绝、不适或持续缺乏回应时，不设计施压、纠缠、贬低、试探或操控话术；" +
+            "5.信息不足时选择澄清或简短承接，不假装记得、不虚构理由；" +
+            "6.避免替用户做重大决定或过度承诺。" +
+            "最后只输出一个 JSON 数组，含且仅含3条可以直接发送的中文回复：" +
+            "第一条稳妥共情并承接核心需求；第二条在事实充分时给具体行动，否则礼貌澄清；" +
+            "第三条简短自然并保留双方空间。三条策略必须不同，每条不超过50字，像真人聊天。" +
+            "不要输出分析、标题、Markdown或数组以外内容。"
 
     private fun parseThree(content: String): List<String> {
         val start = content.indexOf('[')

@@ -139,7 +139,7 @@ open class ChatCaptureService : AccessibilityService() {
         main.post { overlay?.showLoading() }
         val client = JevClient(
             prefs.jevKey, prefs.replyModel, Prefs.JEV_URL, Prefs.JEV_MODEL,
-            prefs.chatKey, prefs.chatUrl, prefs.llmProtocol
+            prefs.chatKey, prefs.chatUrl, prefs.llmProtocol, prefs.analysisMode
         )
         val rel = prefs.relationship
         // Judgment is fast (~1s) — show it immediately.

@@ -134,6 +134,18 @@ class SettingsActivity : AppCompatActivity() {
         // --- 分析 ---
         root.addView(section("分析"))
         val card2 = card()
+        card2.addView(label("分析模式"))
+        val analysisModeNames = listOf("关系军师（推荐）", "通用助手（更简洁）")
+        val analysisModeIds = listOf(Prefs.MODE_RELATIONSHIP, Prefs.MODE_GENERAL)
+        val analysisMode = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity,
+                android.R.layout.simple_spinner_dropdown_item, analysisModeNames)
+            setSelection(analysisModeIds.indexOf(prefs.analysisMode).coerceAtLeast(0))
+        }
+        card2.addView(analysisMode)
+        card2.addView(text("关系军师会先区分事实、推测与未知，再结合情绪、互惠和边界生成回复。", 12f, sub).apply {
+            setPadding(0, dp(5), 0, dp(2))
+        })
         card2.addView(label("关系描述（给 Jev 判断用）"))
         val relEdit = edit(prefs.relationship, Prefs.DEFAULT_REL)
         card2.addView(relEdit)
@@ -179,6 +191,7 @@ class SettingsActivity : AppCompatActivity() {
             prefs.availableModels = addedModels
             prefs.replyModel = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             prefs.relationship = relEdit.text.toString().ifBlank { Prefs.DEFAULT_REL }
+            prefs.analysisMode = analysisModeIds[analysisMode.selectedItemPosition]
             prefs.whitelist = wlEdit.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: true
             prefs.overlayOpacity = seek.progress + 60
@@ -198,7 +211,8 @@ class SettingsActivity : AppCompatActivity() {
                 val demo = ChatSnapshot("连通测试", listOf(
                     Msg("other", "在吗？"), Msg("me", "在"), Msg("other", "那你说说昨天答应我的事")))
                 val a = JevClient(key, model, Prefs.JEV_URL, Prefs.JEV_MODEL, chatKey, chatUrl,
-                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, relEdit.text.toString())
+                    protocolIds[protocol.selectedItemPosition],
+                    analysisModeIds[analysisMode.selectedItemPosition]).analyzeStrict(demo, relEdit.text.toString())
                 main.post {
                     result.text = if (a.error != null) "失败：${a.error}"
                     else "成功：意图=${a.trueIntent?.choice ?: "?"}，候选=${a.rankedReplies.size} 条，耗时 ${a.latencyMs}ms"
