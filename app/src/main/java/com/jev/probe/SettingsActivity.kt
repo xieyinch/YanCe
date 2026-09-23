@@ -87,10 +87,10 @@ class SettingsActivity : AppCompatActivity() {
         card1.addView(label("API Key"))
         val chatKeyEdit = edit(prefs.chatKey, "供应商 API Key", password = true)
         card1.addView(chatKeyEdit)
-        card1.addView(label("生成回复请求地址"))
-        val chatUrlEdit = edit(prefs.chatUrl, "https://example.com/v1/chat/completions")
+        card1.addView(label("供应商地址"))
+        val chatUrlEdit = edit(prefs.chatUrl, "https://example.com/v1 或完整请求地址")
         card1.addView(chatUrlEdit)
-        card1.addView(text("Gemini 地址可用 {model} 作为模型占位符。", 12f, sub).apply {
+        card1.addView(text("可填写域名、/v1 地址或完整请求地址，言策会自动补全。Gemini 也支持 {model} 占位符。", 12f, sub).apply {
             setPadding(0, dp(5), 0, 0)
         })
 

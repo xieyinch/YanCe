@@ -240,7 +240,7 @@ class JevClient(
         require(chatKey.isNotBlank()) { "请填写大语言模型 Key" }
         return when (chatProtocol) {
             "gemini" -> {
-                val url = chatUrl.replace("{model}", replyModel)
+                val url = generationUrl("gemini", chatUrl, replyModel)
                 val body = JSONObject().put("contents", JSONArray().put(JSONObject()
                     .put("role", "user")
                     .put("parts", JSONArray().put(JSONObject().put("text", system + "\n\n" + user)))))
@@ -253,20 +253,83 @@ class JevClient(
                 val body = JSONObject().put("model", replyModel).put("max_tokens", 700)
                     .put("system", system).put("messages", JSONArray().put(JSONObject()
                         .put("role", "user").put("content", user)))
-                val resp = postJson(chatUrl, body, chatKey, "claude")
-                resp.optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: ""
+                val resp = postJson(generationUrl("claude", chatUrl, replyModel), body, chatKey, "claude")
+                extractText(resp)
             }
             else -> {
-                val messages = JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", system))
-                    .put(JSONObject().put("role", "user").put("content", user))
-                val body = JSONObject().put("model", replyModel).put("messages", messages)
-                    .put("temperature", 0.8)
-                val resp = postJson(chatUrl, body, chatKey, "openai")
-                resp.optJSONArray("choices")?.optJSONObject(0)
-                    ?.optJSONObject("message")?.optString("content") ?: ""
+                val url = generationUrl("openai", chatUrl, replyModel)
+                val body = if (url.endsWith("/responses")) {
+                    JSONObject().put("model", replyModel).put("instructions", system).put("input", user)
+                } else {
+                    val messages = JSONArray()
+                        .put(JSONObject().put("role", "system").put("content", system))
+                        .put(JSONObject().put("role", "user").put("content", user))
+                    JSONObject().put("model", replyModel).put("messages", messages)
+                        .put("temperature", 0.8).put("stream", false)
+                }
+                val resp = postJson(url, body, chatKey, "openai")
+                extractText(resp)
             }
         }
+    }
+
+    /** Accept the base URL, /v1 URL, or a complete generation endpoint. */
+    private fun generationUrl(protocol: String, configured: String, model: String): String {
+        val url = configured.trim().trimEnd('/')
+        return when (protocol) {
+            "gemini" -> when {
+                url.contains("{model}") -> url.replace("{model}", model)
+                url.contains(":generateContent") -> url
+                url.endsWith("/v1beta") || url.endsWith("/v1") -> "$url/models/$model:generateContent"
+                URL(url).path.isNullOrBlank() || URL(url).path == "/" -> "$url/v1beta/models/$model:generateContent"
+                else -> "$url/models/$model:generateContent"
+            }
+            "claude" -> when {
+                url.endsWith("/messages") -> url
+                url.endsWith("/v1") -> "$url/messages"
+                URL(url).path.isNullOrBlank() || URL(url).path == "/" -> "$url/v1/messages"
+                else -> url
+            }
+            else -> when {
+                url.endsWith("/chat/completions") || url.endsWith("/responses") -> url
+                url.endsWith("/v1") -> "$url/chat/completions"
+                url.endsWith("/models") -> url.removeSuffix("/models") + "/chat/completions"
+                URL(url).path.isNullOrBlank() || URL(url).path == "/" -> "$url/v1/chat/completions"
+                else -> url
+            }
+        }
+    }
+
+    /** Read common OpenAI-compatible, Responses API, Claude, and proxy wrappers. */
+    private fun extractText(root: JSONObject): String {
+        root.optString("output_text").takeIf { it.isNotBlank() }?.let { return it }
+        root.optJSONObject("data")?.let { data -> extractText(data).takeIf { it.isNotBlank() }?.let { return it } }
+        root.optJSONArray("content")?.let { content ->
+            for (i in 0 until content.length()) {
+                val text = content.optJSONObject(i)?.optString("text").orEmpty()
+                if (text.isNotBlank()) return text
+            }
+        }
+        root.optJSONArray("output")?.let { output ->
+            for (i in 0 until output.length()) {
+                val content = output.optJSONObject(i)?.optJSONArray("content") ?: continue
+                for (j in 0 until content.length()) {
+                    val text = content.optJSONObject(j)?.optString("text").orEmpty()
+                    if (text.isNotBlank()) return text
+                }
+            }
+        }
+        val choice = root.optJSONArray("choices")?.optJSONObject(0)
+        choice?.optString("text")?.takeIf { it.isNotBlank() }?.let { return it }
+        val content = choice?.optJSONObject("message")?.opt("content")
+        if (content is String && content.isNotBlank()) return content
+        if (content is JSONArray) {
+            for (i in 0 until content.length()) {
+                val text = content.optJSONObject(i)?.optString("text").orEmpty()
+                if (text.isNotBlank()) return text
+            }
+        }
+        throw RuntimeException("供应商返回成功，但未找到文本内容")
     }
 
     private fun buildJevContext(a: Analysis): String = listOf(
@@ -380,6 +443,10 @@ class JevClient(
                     readTimeout = 25000
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Accept-Encoding", "identity")
+                    setRequestProperty("Connection", "close")
+                    setRequestProperty("User-Agent", "YanCe/1.2 (Android)")
                     when (protocol) {
                         "gemini" -> setRequestProperty("x-goog-api-key", key)
                         "claude" -> {
@@ -390,6 +457,8 @@ class JevClient(
                     }
                 }
                 val bytes = body.toString().toByteArray(Charsets.UTF_8)
+                // Some OpenAI-compatible gateways reset chunked Android requests.
+                conn.setFixedLengthStreamingMode(bytes.size)
                 conn.outputStream.use { os: OutputStream -> os.write(bytes) }
                 val code = conn.responseCode
                 if (code == 429 || code == 529) {
@@ -433,10 +502,27 @@ class JevClient(
         fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {
             require(key.isNotBlank()) { "请先填写大语言模型 Key" }
             require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
+            val normalized = requestUrl.trim().trimEnd('/')
             val listUrl = when (protocol) {
-                "gemini" -> requestUrl.substringBefore("/models/").trimEnd('/') + "/models"
-                "claude" -> requestUrl.substringBefore("/v1/") + "/v1/models"
-                else -> requestUrl.substringBefore("/chat/completions").trimEnd('/') + "/models"
+                "gemini" -> when {
+                    normalized.contains("/models/") -> normalized.substringBefore("/models/") + "/models"
+                    normalized.endsWith("/v1beta") || normalized.endsWith("/v1") -> "$normalized/models"
+                    URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1beta/models"
+                    else -> normalized.substringBefore(":generateContent").substringBeforeLast("/models", normalized) + "/models"
+                }
+                "claude" -> when {
+                    normalized.endsWith("/v1") -> "$normalized/models"
+                    normalized.contains("/v1/") -> normalized.substringBefore("/v1/") + "/v1/models"
+                    URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1/models"
+                    else -> normalized.removeSuffix("/messages") + "/models"
+                }
+                else -> when {
+                    normalized.endsWith("/v1") -> "$normalized/models"
+                    normalized.endsWith("/chat/completions") -> normalized.removeSuffix("/chat/completions") + "/models"
+                    normalized.endsWith("/responses") -> normalized.removeSuffix("/responses") + "/models"
+                    URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1/models"
+                    else -> normalized.removeSuffix("/models") + "/models"
+                }
             }
             var lastError: Exception? = null
             repeat(3) { attempt ->
