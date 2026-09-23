@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -23,8 +23,23 @@ jobs:
       - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - run: bash gradlew :app:assembleDebug
+      - name: Prepare APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk jev-chat-assistant-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: jev-assistant-debug
-          path: app/build/outputs/apk/debug/*.apk
+          path: jev-chat-assistant-debug.apk
           if-no-files-found: error
+      - name: Publish APK to GitHub Releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: debug-${{ github.run_number }}
+        run: |
+          gh release create "$RELEASE_TAG" jev-chat-assistant-debug.apk \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Jev Chat Assistant Debug #${{ github.run_number }}" \
+            --notes "自动构建的 Android 调试版 APK。提交：${{ github.sha }}" \
+            --prerelease \
+            --latest
