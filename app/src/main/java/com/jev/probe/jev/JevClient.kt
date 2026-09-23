@@ -11,18 +11,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Credentials
-import okhttp3.Dns
 import okhttp3.OkHttpClient
-import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.InetSocketAddress
-import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.Proxy
 import java.net.URI
 import java.net.URL
-import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -518,15 +513,6 @@ class JevClient(
                 .retryOnConnectionFailure(true)
                 .followRedirects(true)
                 .followSslRedirects(true)
-                // Several Chinese relay/CDN routes advertise IPv6 but reset the
-                // TLS socket on mobile networks. Rikka-compatible clients prefer
-                // the working IPv4 route and HTTP/1.1 for these providers.
-                .dns(object : Dns {
-                    @Throws(UnknownHostException::class)
-                    override fun lookup(hostname: String): List<InetAddress> =
-                        Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
-                })
-                .protocols(listOf(Protocol.HTTP_1_1))
                 .addInterceptor { chain ->
                     val original = chain.request()
                     val request = original.newBuilder()
@@ -606,7 +592,7 @@ class JevClient(
             }
             var lastError: Exception? = null
             AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，IPv4 优先 + HTTP/1.1")
-            repeat(3) { attempt ->
+            repeat(5) { attempt ->
                 try {
                     val request = Request.Builder().url(listUrl)
                         .apply {
@@ -650,10 +636,10 @@ class JevClient(
                         e.message?.startsWith("HTTP 408") != true &&
                         e.message?.startsWith("HTTP 429") != true) throw e
                 }
-                if (attempt < 2) Thread.sleep(700L * (attempt + 1))
+                if (attempt < 4) Thread.sleep(1000L * (1L shl attempt))
             }
             val detail = lastError?.message ?: lastError?.javaClass?.simpleName ?: "未知网络错误"
-            throw RuntimeException("连接连续重试 3 次仍失败：$detail")
+            throw RuntimeException("连接连续重试 5 次仍失败：$detail")
         }
     }
 }
