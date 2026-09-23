@@ -148,8 +148,7 @@ open class ChatCaptureService : AccessibilityService() {
         analyzing = true
         main.post { overlay?.showLoading() }
         val client = JevClient(
-            prefs.jevKey, prefs.replyModel, Prefs.JEV_URL, Prefs.JEV_MODEL,
-            prefs.chatKey, prefs.chatUrl, prefs.llmProtocol, prefs.analysisMode
+            prefs.jevKey, prefs.replyModel, prefs.chatKey, prefs.chatUrl, prefs.llmProtocol
         )
         val rel = prefs.relationship + relationshipMemory.contextFor(snapshot.title)
         val requestSignature = snapshot.signature()

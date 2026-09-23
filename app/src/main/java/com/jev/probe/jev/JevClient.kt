@@ -24,12 +24,9 @@ import java.net.URL
 class JevClient(
     private val decisionKey: String,
     private val replyModel: String,
-    private val decisionsUrl: String = "https://api.typesafe.ai/v1/systemone",
-    private val decisionModel: String = "jev-latest",
     private val chatKey: String,
     private val chatUrl: String,
-    private val chatProtocol: String = "openai",
-    private val analysisMode: String = "relationship"
+    private val chatProtocol: String = "openai"
 ) {
 
     private data class Coaching(
@@ -118,14 +115,6 @@ class JevClient(
         conflictType = latestCoaching.conflictType
     )
 
-    /** Convenience for the settings connectivity test: judge + replies, sequential. */
-    fun analyze(snapshot: ChatSnapshot, relationship: String): Analysis {
-        val a = judge(snapshot, relationship)
-        if (a.error != null) return a
-        val ranked = try { draftAndRank(snapshot, relationship, a) } catch (e: Exception) { emptyList() }
-        return enrich(a, ranked)
-    }
-
     /** Connectivity test that fails when either Jev or the text model fails. */
     fun analyzeStrict(snapshot: ChatSnapshot, relationship: String): Analysis {
         val a = judge(snapshot, relationship)
@@ -144,14 +133,9 @@ class JevClient(
             val convo = snapshot.messages.takeLast(10).joinToString("\n") {
                 (if (it.side == "me") "我" else "对方") + "：" + it.text
             }
-            val system = if (analysisMode == "relationship") {
-                "你是谨慎、清醒的中文关系沟通助手。先识别情绪和真实需求，严格区分事实、合理推测和未知；" +
-                    "优先考虑互惠、可靠性、边界与长期信任；不得编造事实，不得设计施压、纠缠或操控话术。" +
-                    "完成结构化判断并生成回复，只输出一个JSON对象，不要Markdown。"
-            } else {
-                "你是中文即时通讯分析与回复助手。根据聊天原文完成结构化判断并生成自然回复。" +
-                    "不编造事实或承诺，只输出一个JSON对象，不要Markdown。"
-            }
+            val system = "你是谨慎、清醒的中文关系沟通助手。先识别情绪和真实需求，严格区分事实、合理推测和未知；" +
+                "优先考虑互惠、可靠性、边界与长期信任；不得编造事实，不得设计施压、纠缠或操控话术。" +
+                "完成结构化判断并生成回复，只输出一个JSON对象，不要Markdown。"
             val user = "关系：" + relationship + "\n\n最近对话：\n" + convo +
                 "\n\n返回字段：true_intent只能是confirm_you_care、vent_anger、request_action、" +
                 "seek_explanation、casual_chat、close_topic之一；danger_level为0到9数字；" +
@@ -240,18 +224,13 @@ class JevClient(
         val convo = snapshot.messages.takeLast(10).joinToString("\n") {
             (if (it.side == "me") "我" else "对方") + "：" + it.text
         }
-        val sys = if (analysisMode == "relationship") relationshipCoachPrompt else generalPrompt
         val jevContext = buildJevContext(judgment)
         val user = "关系：$relationship\n\n最近对话：\n$convo\n\nJev结构化判断：\n$jevContext\n\n" +
             "请以聊天原文为事实边界，并参考Jev判断给出3条候选回复。Jev判断只是辅助，" +
             "若它与原文明显冲突，应以原文为准。"
-        val content = callChat(sys, user)
-        if (analysisMode == "relationship") {
-            val root = parseObject(content)
-            latestCoaching = parseCoaching(root)
-            return parseReplyArray(root.optJSONArray("replies"))
-        }
-        return parseThree(content)
+        val root = parseObject(callChat(relationshipCoachPrompt, user))
+        latestCoaching = parseCoaching(root)
+        return parseReplyArray(root.optJSONArray("replies"))
     }
 
     private fun callChat(system: String, user: String): String {
@@ -310,11 +289,6 @@ class JevClient(
         else -> "uncertain"
     }
 
-    private val generalPrompt: String
-        get() = "你是中文即时通讯回复助手。只输出一个 JSON 数组，含且仅含 3 条候选回复文本。" +
-            "三条策略要有区别：稳妥承接、具体行动、简短自然。每条不超过40字，口语化，" +
-            "不编造聊天里没有的事实，不自动替用户作出承诺。不要解释，直接输出 JSON 数组。"
-
     /**
      * A compact, original relationship-coaching workflow inspired by evidence-aware
      * communication practice. It intentionally does not embed third-party documents.
@@ -362,27 +336,6 @@ class JevClient(
             reciprocity = root.optString("reciprocity").takeIf { it in setOf("mutual", "insufficient", "imbalanced", "rejected", "danger") },
             conflictType = root.optString("conflict_type").takeIf { it in setOf("none", "misunderstanding", "solvable", "persistent_difference", "core_incompatibility", "power_safety") }
         )
-    }
-
-    private fun parseThree(content: String): List<String> {
-        val start = content.indexOf('[')
-        val end = content.lastIndexOf(']')
-        if (start >= 0 && end > start) {
-            try {
-                val arr = JSONArray(content.substring(start, end + 1))
-                val out = ArrayList<String>()
-                for (i in 0 until arr.length()) out.add(arr.getString(i).trim())
-                if (out.size >= 3) return out.take(3)
-                while (out.size < 3) out.add("（稍等，我看下）")
-                return out
-            } catch (_: Exception) { }
-        }
-        // Fallback: split lines.
-        val lines = content.split("\n").map { it.trim().trimStart('-', '*', '1', '2', '3', '.', ' ', '"') }
-            .filter { it.isNotBlank() }
-        val out = lines.take(3).toMutableList()
-        while (out.size < 3) out.add("（稍等，我看下）")
-        return out
     }
 
     private fun parseChoice(o: JSONObject?): Choice? {
@@ -471,6 +424,8 @@ class JevClient(
 
     companion object {
         private const val TAG = "JEVASSIST"
+        private const val decisionsUrl = "https://api.typesafe.ai/v1/systemone"
+        private const val decisionModel = "jev-latest"
 
         /** Fetch model identifiers exposed by the configured provider. */
         fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {

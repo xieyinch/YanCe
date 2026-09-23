@@ -52,11 +52,6 @@ class Prefs(context: Context) {
         get() = sp.getString(K_REL, DEFAULT_REL) ?: DEFAULT_REL
         set(v) = sp.edit().putString(K_REL, v).apply()
 
-    /** Reply strategy: quick generic drafting or deeper relationship-aware drafting. */
-    var analysisMode: String
-        get() = sp.getString(K_ANALYSIS_MODE, MODE_RELATIONSHIP) ?: MODE_RELATIONSHIP
-        set(v) = sp.edit().putString(K_ANALYSIS_MODE, v).apply()
-
     /** Master on/off for showing the overlay + running analysis. */
     var enabled: Boolean
         get() = sp.getBoolean(K_ENABLED, true)
@@ -106,7 +101,6 @@ class Prefs(context: Context) {
     companion object {
         private const val K_REPLY_MODEL = "reply_model"
         private const val K_REL = "relationship"
-        private const val K_ANALYSIS_MODE = "analysis_mode"
         private const val K_ENABLED = "enabled"
         private const val K_WHITELIST = "whitelist"
         private const val K_OPACITY = "overlay_opacity"
@@ -114,11 +108,7 @@ class Prefs(context: Context) {
         private const val K_BUBBLE_X = "bubble_x"
         private const val K_AUTO = "auto_analyze"
 
-        const val JEV_URL = "https://api.typesafe.ai/v1/systemone"
-        const val JEV_MODEL = "jev-latest"
         const val DEFAULT_REPLY_MODEL = ""
         const val DEFAULT_REL = "对方是我的伴侣；from=me 的是我发的，from=other 的是对方发的"
-        const val MODE_GENERAL = "general"
-        const val MODE_RELATIONSHIP = "relationship"
     }
 }
