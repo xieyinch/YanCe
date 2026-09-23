@@ -41,5 +41,4 @@ jobs:
             --target "${{ github.sha }}" \
             --title "Jev Chat Assistant Debug #${{ github.run_number }}" \
             --notes "自动构建的 Android 调试版 APK。提交：${{ github.sha }}" \
-            --prerelease \
-            --latest
+            --prerelease
