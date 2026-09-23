@@ -25,6 +25,7 @@ import com.jev.probe.core.AppLog
 import com.jev.probe.core.Msg
 import com.jev.probe.core.Prefs
 import com.jev.probe.jev.JevClient
+import com.jev.probe.ui.YanCeUi
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -34,9 +35,9 @@ class SettingsActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
-    private val accent = Color.parseColor("#3A7AFE")
-    private val ink = Color.parseColor("#111827")
-    private val sub = Color.parseColor("#6B7280")
+    private val accent = YanCeUi.NAVY
+    private val ink = YanCeUi.TEXT
+    private val sub = YanCeUi.MUTED
 
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).roundToInt()
@@ -45,16 +46,22 @@ class SettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         AppLog.init(this)
         prefs = Prefs(this)
-        window.decorView.setBackgroundColor(Color.parseColor("#F2F3F5"))
+        window.statusBarColor = YanCeUi.BG
+        window.navigationBarColor = YanCeUi.BG
+        window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
 
         val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(28))
+            setPadding(dp(20), dp(16), dp(20), dp(32))
+            setBackgroundColor(YanCeUi.BG)
         }
         scroll.addView(root)
 
-        root.addView(header("设置"))
+        root.addView(header("‹   设置").apply { setOnClickListener { finish() } })
+        root.addView(text("连接模型、调整分析方式与悬浮助手", 13f, sub).apply {
+            setPadding(dp(3), dp(7), 0, dp(12))
+        })
 
         // --- 接口 ---
         root.addView(section("模型供应商"))
@@ -252,39 +259,40 @@ class SettingsActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         val sw = TextView(this).apply {
-            text = if (initial) "开" else "关"; textSize = 13f; gravity = Gravity.CENTER
+            text = if (initial) "已开启" else "已关闭"; textSize = 13f; gravity = Gravity.CENTER
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(if (initial) Color.WHITE else sub)
-            background = round(dp(10), if (initial) accent else Color.parseColor("#E5E7EB"))
+            background = round(dp(18), if (initial) YanCeUi.MINT else Color.parseColor("#ECEEF3"))
             setPadding(dp(18), dp(6), dp(18), dp(6))
         }
         sw.setOnClickListener {
             val now = !((row.tag as? Boolean) ?: true); row.tag = now
-            sw.text = if (now) "开" else "关"
+            sw.text = if (now) "已开启" else "已关闭"
             sw.setTextColor(if (now) Color.WHITE else sub)
-            sw.background = round(dp(10), if (now) accent else Color.parseColor("#E5E7EB"))
+            sw.background = round(dp(18), if (now) YanCeUi.MINT else Color.parseColor("#ECEEF3"))
         }
         row.addView(lab); row.addView(sw)
         return row
     }
 
     // atoms
-    private fun header(t: String) = text(t, 24f, ink, bold = true).apply { setPadding(0, 0, 0, dp(4)) }
-    private fun section(t: String) = text(t, 12f, sub, bold = true).apply { setPadding(dp(2), dp(16), 0, dp(6)) }
-    private fun label(t: String) = text(t, 13f, ink, bold = true).apply { setPadding(0, dp(12), 0, dp(4)) }
+    private fun header(t: String) = text(t, 26f, ink, bold = true).apply { setPadding(0, dp(2), 0, dp(4)) }
+    private fun section(t: String) = text(t, 13f, sub, bold = true).apply { setPadding(dp(3), dp(22), 0, dp(7)) }
+    private fun label(t: String) = text(t, 13f, ink, bold = true).apply { setPadding(0, dp(14), 0, dp(6)) }
 
     private fun card() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = round(dp(14), Color.WHITE)
-        setPadding(dp(14), dp(4), dp(14), dp(14))
+        background = round(dp(20), Color.WHITE, strokeColor = YanCeUi.LINE)
+        elevation = dp(1).toFloat()
+        setPadding(dp(16), dp(5), dp(16), dp(16))
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private fun edit(value: String, hint: String, password: Boolean = false) = EditText(this).apply {
         setText(value); this.hint = hint; textSize = 14f; setTextColor(ink)
-        background = round(dp(8), Color.parseColor("#F3F4F6"))
-        setPadding(dp(10), dp(10), dp(10), dp(10))
+        background = round(dp(12), Color.parseColor("#F7F8FA"), strokeColor = YanCeUi.LINE)
+        setPadding(dp(12), dp(12), dp(12), dp(12))
         if (password) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
@@ -296,7 +304,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun primaryBtn(label: String, onClick: () -> Unit) = TextView(this).apply {
         text = label; textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-        setTextColor(Color.WHITE); background = round(dp(12), accent)
+        setTextColor(Color.WHITE); background = round(dp(16), accent)
         setPadding(dp(16), dp(13), dp(16), dp(13))
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) }
@@ -305,15 +313,16 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun secondaryBtn(label: String, onClick: () -> Unit) = TextView(this).apply {
         text = label; textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-        setTextColor(accent); background = round(dp(12), Color.WHITE, stroke = true)
+        setTextColor(accent); background = round(dp(14), Color.WHITE, strokeColor = YanCeUi.LINE)
         setPadding(dp(16), dp(12), dp(16), dp(12))
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
         setOnClickListener { onClick() }
     }
 
-    private fun round(radius: Int, color: Int, stroke: Boolean = false) = GradientDrawable().apply {
-        cornerRadius = radius.toFloat(); setColor(color); if (stroke) setStroke(dp(1), accent)
+    private fun round(radius: Int, color: Int, stroke: Boolean = false, strokeColor: Int? = null) = GradientDrawable().apply {
+        cornerRadius = radius.toFloat(); setColor(color)
+        if (stroke) setStroke(dp(1), accent) else strokeColor?.let { setStroke(dp(1), it) }
     }
 
     override fun onDestroy() { super.onDestroy(); worker.shutdownNow() }

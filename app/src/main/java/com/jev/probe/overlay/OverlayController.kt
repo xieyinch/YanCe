@@ -23,6 +23,7 @@ import com.jev.probe.core.Analysis
 import com.jev.probe.core.ChatSnapshot
 import com.jev.probe.core.Prefs
 import com.jev.probe.core.RankedReply
+import com.jev.probe.ui.YanCeUi
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -109,14 +110,14 @@ class OverlayController(private val ctx: Context) {
             layoutParams = FrameLayout.LayoutParams(dp(52), dp(52))
         }
         val b = TextView(ctx).apply {
-            text = "Jev"
+            text = "言"
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             textSize = 13f
             setTypeface(typeface, Typeface.BOLD)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(235, 58, 122, 254))
+                setColor(Color.argb(245, 23, 26, 58))
             }
             layoutParams = FrameLayout.LayoutParams(dp(52), dp(52))
         }
@@ -147,7 +148,7 @@ class OverlayController(private val ctx: Context) {
         // Header
         val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         header.addView(TextView(ctx).apply {
-            text = "Jev 分析"; setTextColor(Color.parseColor("#111827")); textSize = 15f
+            text = "言策建议"; setTextColor(YanCeUi.NAVY); textSize = 16f
             setTypeface(typeface, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
@@ -274,7 +275,7 @@ class OverlayController(private val ctx: Context) {
     private fun bigButton(label: String, onClick: () -> Unit) = TextView(ctx).apply {
         text = label; textSize = 14f; gravity = Gravity.CENTER
         setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
-        background = card(12, Color.parseColor("#3A7AFE"))
+        background = card(14, YanCeUi.NAVY)
         setPadding(dp(12), dp(11), dp(12), dp(11))
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -334,7 +335,7 @@ class OverlayController(private val ctx: Context) {
         }
         // Intent headline.
         a.trueIntent?.let {
-            views.add(line("对方真实意图：${INTENT[it.choice] ?: it.choice}", "#111827", 15f, true))
+            views.add(line("对方可能想表达：${INTENT[it.choice] ?: it.choice}", "#171A3A", 15f, true))
             views.add(hint("把握 ${(it.confidence * 100).roundToInt()}%"))
         }
         // Compact secondary line: needs · action · reply-now.
@@ -383,7 +384,7 @@ class OverlayController(private val ctx: Context) {
 
     private fun replyCard(rank: Int, text: String, pct: Int, onFill: (String) -> Unit): View {
         val top = rank == 1
-        val cardBg = if (top) Color.parseColor("#EAF1FF") else Color.parseColor("#F3F4F6")
+        val cardBg = if (top) YanCeUi.MINT_SOFT else Color.parseColor("#F7F8FA")
         val c = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = card(12, cardBg)
@@ -393,7 +394,7 @@ class OverlayController(private val ctx: Context) {
             ).apply { topMargin = dp(6) }
         }
         c.addView(TextView(ctx).apply {
-            this.text = "#$rank · ${pct}%"; setTextColor(Color.parseColor("#3A7AFE")); textSize = 11f
+            this.text = "建议 $rank · ${pct}%"; setTextColor(YanCeUi.SUCCESS); textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
         })
         c.addView(TextView(ctx).apply {
@@ -411,8 +412,8 @@ class OverlayController(private val ctx: Context) {
     private fun pill(label: String, primary: Boolean, onClick: () -> Unit) = TextView(ctx).apply {
         text = label; textSize = 13f; gravity = Gravity.CENTER
         setTypeface(typeface, Typeface.BOLD)
-        setTextColor(if (primary) Color.WHITE else Color.parseColor("#3A7AFE"))
-        background = card(18, if (primary) Color.parseColor("#3A7AFE") else Color.parseColor("#FFFFFF"), stroke = !primary)
+        setTextColor(if (primary) Color.WHITE else YanCeUi.NAVY)
+        background = card(18, if (primary) YanCeUi.NAVY else Color.parseColor("#FFFFFF"), stroke = !primary)
         setPadding(dp(18), dp(6), dp(18), dp(6))
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT

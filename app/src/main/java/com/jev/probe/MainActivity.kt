@@ -1,221 +1,156 @@
 package com.jev.probe
 
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.jev.probe.core.Prefs
-import kotlin.math.roundToInt
+import com.jev.probe.ui.YanCeUi
 
-/**
- * Home / setup screen. Card-based layout with a live readiness summary, a
- * guided permission checklist (each row reflects its real granted state), a
- * prominent on/off switch, and a link to settings.
- */
 class MainActivity : AppCompatActivity() {
-
     private lateinit var prefs: Prefs
-    private lateinit var container: LinearLayout
-    private val a11yComponent =
-        "com.jev.probe/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
-
-    private val accent = Color.parseColor("#3A7AFE")
-    private val green = Color.parseColor("#16A34A")
-    private val red = Color.parseColor("#DC2626")
-    private val ink = Color.parseColor("#111827")
-    private val sub = Color.parseColor("#6B7280")
-
-    private fun dp(v: Int) = TypedValue.applyDimension(
-        TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).roundToInt()
+    private lateinit var root: LinearLayout
+    private val a11yComponent = "com.jev.probe/com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+    private fun dp(v: Int) = YanCeUi.dp(this, v)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        window.decorView.setBackgroundColor(Color.parseColor("#F2F3F5"))
-
-        val scroll = ScrollView(this)
-        container = LinearLayout(this).apply {
+        window.statusBarColor = YanCeUi.BG
+        window.navigationBarColor = YanCeUi.BG
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(28))
+            setPadding(dp(20), dp(16), dp(20), dp(32))
         }
-        scroll.addView(container)
-        setContentView(scroll)
+        setContentView(ScrollView(this).apply {
+            setBackgroundColor(YanCeUi.BG); isFillViewport = true; addView(root)
+        })
     }
 
-    override fun onResume() {
-        super.onResume()
-        build()
-    }
+    override fun onResume() { super.onResume(); render() }
 
-    private fun build() {
-        container.removeAllViews()
-
-        container.addView(text("言策", 24f, ink, bold = true))
-        container.addView(text("在聊天 App 旁读对方消息（已支持微信、QQ、X、飞书），给出判断和候选回复。发送始终由你手动点。",
-            13f, sub).apply { setPadding(0, dp(6), 0, dp(16)) })
-
+    private fun render() {
+        root.removeAllViews()
         val a11y = isA11yEnabled()
         val overlay = Settings.canDrawOverlays(this)
-        val modelReady = prefs.canAnalyze()
-        val ready = a11y && overlay && modelReady
+        val model = prefs.canAnalyze()
+        val ready = a11y && overlay && model
 
-        // Readiness card
-        container.addView(statusCard(ready, a11y, overlay, modelReady))
+        root.addView(topBar())
+        root.addView(hero(ready))
+        root.addView(TextView(this).apply {
+            text = if (prefs.enabled) "助手运行中 · 点击暂停" else "启动悬浮助手"
+            textSize = 16f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(if (prefs.enabled) YanCeUi.NAVY else android.graphics.Color.WHITE)
+            background = YanCeUi.bg(this@MainActivity, if (prefs.enabled) YanCeUi.MINT else YanCeUi.NAVY, 16)
+            minHeight = dp(56); setPadding(dp(18), dp(14), dp(18), dp(14))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(18)
+            }
+            setOnClickListener { prefs.enabled = !prefs.enabled; render() }
+        })
 
-        // Permission checklist
-        container.addView(sectionLabel("权限设置"))
-        container.addView(permCard("无障碍权限", "读取当前聊天窗口的消息文字", a11y) {
+        root.addView(YanCeUi.text(this, "使用准备", 13f, YanCeUi.MUTED, true).apply {
+            setPadding(dp(4), dp(28), 0, dp(2))
+        })
+        val readiness = YanCeUi.card(this, 0)
+        readiness.addView(statusRow(android.R.drawable.ic_menu_view, "无障碍服务", "用于读取当前聊天内容", a11y) {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
-        container.addView(permCard("悬浮窗权限", "在聊天窗口上方显示分析卡片", overlay) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        })
-        container.addView(permCard("自启动 + 省电无限制", "小米/HyperOS 必做，否则服务被冻结、读不到消息", null) {
-            runCatching {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-            }
-        })
-
-        // Actions
-        container.addView(sectionLabel("其他"))
-        container.addView(actionRow("设置", "密钥 · 模型 · 关系 · 透明度 · 会话白名单") {
+        readiness.addView(YanCeUi.divider(this))
+        readiness.addView(statusRow(android.R.drawable.ic_menu_manage, "模型服务", "提供意图分析与回复建议", model) {
             startActivity(Intent(this, SettingsActivity::class.java))
         })
-
-        // Master toggle
-        val toggle = bigToggle(prefs.enabled)
-        toggle.setOnClickListener {
-            prefs.enabled = !prefs.enabled
-            build()
-        }
-        container.addView(toggle)
-    }
-
-    // ---------------------------------------------------------------- cards
-
-    private fun statusCard(ready: Boolean, a11y: Boolean, overlay: Boolean, modelReady: Boolean): View {
-        val c = cardBox()
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        head.addView(dot(if (ready) green else red).apply {
-            (layoutParams as LinearLayout.LayoutParams).rightMargin = dp(10)
+        readiness.addView(YanCeUi.divider(this))
+        readiness.addView(statusRow(android.R.drawable.ic_menu_share, "悬浮窗权限", "在聊天应用上显示建议", overlay) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         })
-        head.addView(text(if (ready) "已就绪，可以用了" else "尚未就绪", 16f, if (ready) green else ink, bold = true))
-        c.addView(head)
-        c.addView(checkLine("无障碍", a11y))
-        c.addView(checkLine("悬浮窗", overlay))
-        c.addView(checkLine("大模型", modelReady, okWord = "已配置", noWord = "未配置"))
-        return c
-    }
+        root.addView(readiness)
 
-    private fun checkLine(label: String, ok: Boolean, okWord: String = "已开", noWord: String = "未开"): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(5), 0, 0)
-        }
-        row.addView(text(if (ok) "✓" else "✗", 14f, if (ok) green else red, bold = true).apply {
-            (this as TextView).width = dp(22)
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, 0) }
+        tools.addView(toolButton(android.R.drawable.ic_menu_preferences, "模型与偏好") {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }, LinearLayout.LayoutParams(0, dp(78), 1f).apply { rightMargin = dp(6) })
+        tools.addView(toolButton(android.R.drawable.ic_menu_recent_history, "运行日志") {
+            startActivity(Intent(this, LogActivity::class.java))
+        }, LinearLayout.LayoutParams(0, dp(78), 1f).apply { leftMargin = dp(6) })
+        root.addView(tools)
+        root.addView(YanCeUi.text(this, "内容仅在分析时读取，回复始终由你手动发送", 12f, YanCeUi.MUTED).apply {
+            gravity = Gravity.CENTER; setPadding(0, dp(24), 0, 0)
         })
-        row.addView(text(label + (if (ok) okWord else noWord), 13f, sub))
-        return row
     }
 
-    private fun permCard(title: String, desc: String, granted: Boolean?, onClick: () -> Unit): View {
-        val c = cardBox()
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val left = LinearLayout(this).apply {
+    private fun topBar() = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        left.addView(text(title, 15f, ink, bold = true))
-        left.addView(text(desc, 12f, sub).apply { setPadding(0, dp(3), 0, 0) })
-        if (granted == true) left.addView(text("✓ 已开启", 12f, green, bold = true).apply { setPadding(0, dp(4), 0, 0) })
-        row.addView(left)
-        row.addView(btn(if (granted == true) "已开启" else "去开启", granted != true, onClick))
-        c.addView(row)
-        return c
+            addView(YanCeUi.text(this@MainActivity, "言策", 29f, YanCeUi.NAVY, true))
+            addView(YanCeUi.text(this@MainActivity, "更好的对话，从此开始", 13f, YanCeUi.MUTED).apply { setPadding(0, dp(5), 0, 0) })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(android.R.drawable.ic_menu_preferences); setColorFilter(YanCeUi.NAVY)
+            background = YanCeUi.bg(this@MainActivity, YanCeUi.SURFACE, 14, YanCeUi.LINE)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
     }
 
-    private fun actionRow(title: String, desc: String, onClick: () -> Unit): View {
-        val c = cardBox()
-        c.setOnClickListener { onClick() }
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val left = LinearLayout(this).apply {
+    private fun hero(ready: Boolean) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+        setPadding(dp(18), dp(30), dp(18), dp(8))
+        addView(TextView(this@MainActivity).apply {
+            text = if (ready) "↗" else "!"; textSize = 44f; gravity = Gravity.CENTER
+            setTextColor(YanCeUi.NAVY); setTypeface(typeface, Typeface.BOLD)
+            background = YanCeUi.bg(this@MainActivity, YanCeUi.MINT_SOFT, 34)
+        }, LinearLayout.LayoutParams(dp(112), dp(112)))
+        addView(YanCeUi.text(this@MainActivity, if (ready) "助手已就绪" else "还差几步即可使用", 27f, YanCeUi.NAVY, true).apply {
+            setPadding(0, dp(22), 0, 0)
+        })
+        addView(YanCeUi.text(this@MainActivity,
+            if (ready) "切换到聊天界面即可获取回复建议" else "完成下方项目后即可开始辅助对话", 14f, YanCeUi.MUTED
+        ).apply { setPadding(0, dp(9), 0, 0) })
+    }
+
+    private fun statusRow(icon: Int, title: String, desc: String, ok: Boolean, click: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(16), dp(15), dp(14), dp(15)); setOnClickListener { click() }
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(icon); setColorFilter(YanCeUi.SUCCESS)
+            background = YanCeUi.bg(this@MainActivity, YanCeUi.MINT_SOFT, 14)
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+        }, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(13) })
+        addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        left.addView(text(title, 15f, ink, bold = true))
-        left.addView(text(desc, 12f, sub).apply { setPadding(0, dp(3), 0, 0) })
-        row.addView(left)
-        row.addView(text("›", 22f, sub))
-        c.addView(row)
-        return c
+            addView(YanCeUi.text(this@MainActivity, title, 15f, YanCeUi.TEXT, true))
+            addView(YanCeUi.text(this@MainActivity, desc, 12f, YanCeUi.MUTED).apply { setPadding(0, dp(4), 0, 0) })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(YanCeUi.text(this@MainActivity, if (ok) "✓  已开启" else "去开启  ›", 13f,
+            if (ok) YanCeUi.SUCCESS else YanCeUi.DANGER, true).apply {
+            background = YanCeUi.bg(this@MainActivity, if (ok) YanCeUi.MINT_SOFT else 0xFFFFEEF0.toInt(), 18)
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+        })
     }
 
-    private fun bigToggle(on: Boolean): View {
-        return TextView(this).apply {
-            text = if (on) "助手已开启 · 点击关闭" else "助手已关闭 · 点击开启"
-            textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(if (on) Color.WHITE else accent)
-            background = roundBg(dp(14), if (on) accent else Color.WHITE, stroke = !on)
-            setPadding(dp(16), dp(15), dp(16), dp(15))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(18) }
-        }
-    }
-
-    // ---------------------------------------------------------------- atoms
-
-    private fun cardBox(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        background = roundBg(dp(14), Color.WHITE)
-        setPadding(dp(14), dp(13), dp(14), dp(13))
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(10) }
-    }
-
-    private fun sectionLabel(t: String) = text(t, 12f, sub, bold = true).apply {
-        setPadding(dp(2), dp(18), 0, dp(2))
-    }
-
-    private fun text(t: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
-        text = t; textSize = size; setTextColor(color)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
-    }
-
-    private fun dot(color: Int) = View(this).apply {
-        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
-        layoutParams = LinearLayout.LayoutParams(dp(10), dp(10))
-    }
-
-    private fun btn(label: String, enabled: Boolean, onClick: () -> Unit) = TextView(this).apply {
-        text = label; textSize = 13f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-        setTextColor(if (enabled) Color.WHITE else sub)
-        background = roundBg(dp(10), if (enabled) accent else Color.parseColor("#E5E7EB"))
-        setPadding(dp(16), dp(8), dp(16), dp(8))
-        if (enabled) setOnClickListener { onClick() }
-    }
-
-    private fun roundBg(radius: Int, color: Int, stroke: Boolean = false) = GradientDrawable().apply {
-        cornerRadius = radius.toFloat(); setColor(color)
-        if (stroke) setStroke(dp(1), accent)
+    private fun toolButton(icon: Int, label: String, click: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+        background = YanCeUi.bg(this@MainActivity, YanCeUi.SURFACE, 18, YanCeUi.LINE); setOnClickListener { click() }
+        addView(ImageView(this@MainActivity).apply { setImageResource(icon); setColorFilter(YanCeUi.NAVY) },
+            LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
+        addView(YanCeUi.text(this@MainActivity, label, 14f, YanCeUi.NAVY, true))
     }
 
     private fun isA11yEnabled(): Boolean {
-        val enabled = Settings.Secure.getString(contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
         return enabled.contains(a11yComponent)
     }
 }
