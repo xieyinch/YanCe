@@ -10,9 +10,13 @@ import com.jev.probe.core.Score
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.URI
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -28,8 +32,14 @@ class JevClient(
     private val replyModel: String,
     private val chatKey: String,
     private val chatUrl: String,
-    private val chatProtocol: String = "openai"
+    private val chatProtocol: String = "openai",
+    proxyUrl: String = "",
+    proxyUsername: String = "",
+    proxyPassword: String = "",
+    userAgent: String = ""
 ) {
+
+    private val http = buildHttp(proxyUrl, proxyUsername, proxyPassword, userAgent)
 
     private data class Coaching(
         val emotion: String? = null,
@@ -452,7 +462,7 @@ class JevClient(
                     }
                     .post(bytes.toRequestBody(JSON_MEDIA_TYPE, 0, bytes.size))
                     .build()
-                HTTP.newCall(request).execute().use { response ->
+                http.newCall(request).execute().use { response ->
                     val code = response.code
                     val text = response.body?.string().orEmpty()
                     if (code == 429 || code == 529) {
@@ -489,41 +499,75 @@ class JevClient(
         private const val decisionsUrl = "https://api.typesafe.ai/v1/systemone"
         private const val decisionModel = "jev-latest"
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
-        private val HTTP = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.MINUTES)
-            .writeTimeout(120, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .addInterceptor { chain ->
-                val original = chain.request()
-                val request = original.newBuilder()
-                    .header("Accept-Language", Locale.getDefault().toLanguageTag())
-                    .apply {
-                        if (original.header("User-Agent") == null) {
-                            header("User-Agent", "YanCe-Android/1.2")
-                        }
-                    }.build()
-                chain.proceed(request)
-            }
-            .addNetworkInterceptor { chain ->
-                val request = chain.request()
-                val contentType = request.header("Content-Type")
-                if (contentType != null && contentType.contains(";") &&
-                    contentType.substringBefore(";").trim().equals("application/json", true)) {
-                    chain.proceed(request.newBuilder().header("Content-Type", "application/json").build())
-                } else {
+        private fun buildHttp(
+            proxyUrl: String = "",
+            proxyUsername: String = "",
+            proxyPassword: String = "",
+            userAgent: String = ""
+        ): OkHttpClient {
+            val builder = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.MINUTES)
+                .writeTimeout(120, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .addInterceptor { chain ->
+                    val original = chain.request()
+                    val request = original.newBuilder()
+                        .header("Accept-Language", Locale.getDefault().toLanguageTag())
+                        .apply {
+                            if (original.header("User-Agent") == null) {
+                                header("User-Agent", userAgent.ifBlank { "RikkaHub-Android/2.5.3" })
+                            }
+                        }.build()
                     chain.proceed(request)
                 }
+                .addNetworkInterceptor { chain ->
+                    val request = chain.request()
+                    val contentType = request.header("Content-Type")
+                    if (contentType != null && contentType.contains(";") &&
+                        contentType.substringBefore(";").trim().equals("application/json", true)) {
+                        chain.proceed(request.newBuilder().header("Content-Type", "application/json").build())
+                    } else chain.proceed(request)
+                }
+
+            parseProxy(proxyUrl)?.let { proxy ->
+                builder.proxy(proxy)
+                if (proxyUsername.isNotBlank()) {
+                    builder.proxyAuthenticator { _, response ->
+                        val credential = Credentials.basic(proxyUsername, proxyPassword)
+                        if (response.request.header("Proxy-Authorization") == credential) null
+                        else response.request.newBuilder().header("Proxy-Authorization", credential).build()
+                    }
+                }
             }
-            .build()
+            return builder.build()
+        }
+
+        private fun parseProxy(value: String): Proxy? {
+            if (value.isBlank()) return null // OkHttp uses Android's system ProxySelector.
+            val uri = URI(value.trim())
+            require(uri.host != null && uri.port in 1..65535) { "代理格式应为 http://主机:端口 或 socks5://主机:端口" }
+            val type = if (uri.scheme.equals("socks5", true) || uri.scheme.equals("socks", true))
+                Proxy.Type.SOCKS else Proxy.Type.HTTP
+            return Proxy(type, InetSocketAddress.createUnresolved(uri.host, uri.port))
+        }
 
         /** Fetch model identifiers exposed by the configured provider. */
-        fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {
+        fun fetchModels(
+            protocol: String,
+            key: String,
+            requestUrl: String,
+            proxyUrl: String = "",
+            proxyUsername: String = "",
+            proxyPassword: String = "",
+            userAgent: String = ""
+        ): List<String> {
             require(key.isNotBlank()) { "请先填写大语言模型 Key" }
             require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
             val normalized = requestUrl.trim().trimEnd('/')
+            val http = buildHttp(proxyUrl, proxyUsername, proxyPassword, userAgent)
             val listUrl = when (protocol) {
                 "gemini" -> when {
                     normalized.contains("/models/") -> normalized.substringBefore("/models/") + "/models"
@@ -560,7 +604,7 @@ class JevClient(
                             }
                         }
                         .get().build()
-                    HTTP.newCall(request).execute().use { response ->
+                    http.newCall(request).execute().use { response ->
                         val code = response.code
                         val text = response.body?.string().orEmpty()
                         if (!response.isSuccessful) {

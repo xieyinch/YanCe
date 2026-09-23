@@ -93,6 +93,19 @@ class SettingsActivity : AppCompatActivity() {
         card1.addView(text("可填写域名、/v1 地址或完整请求地址，言策会自动补全。Gemini 也支持 {model} 占位符。", 12f, sub).apply {
             setPadding(0, dp(5), 0, 0)
         })
+        card1.addView(label("网络代理（可选）"))
+        val proxyUrlEdit = edit(prefs.proxyUrl, "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890")
+        card1.addView(proxyUrlEdit)
+        val proxyUsernameEdit = edit(prefs.proxyUsername, "代理用户名（可选）")
+        card1.addView(proxyUsernameEdit)
+        val proxyPasswordEdit = edit(prefs.proxyPassword, "代理密码（可选）", password = true)
+        card1.addView(proxyPasswordEdit)
+        card1.addView(label("自定义 User-Agent（可选）"))
+        val userAgentEdit = edit(prefs.networkUserAgent, "留空使用 RikkaHub-Android/2.5.3")
+        card1.addView(userAgentEdit)
+        card1.addView(text("留空代理时自动使用 Android 系统/VPN 网络；填写后与 RikkaHub 一样支持 HTTP、HTTPS 和 SOCKS5 代理。", 12f, sub).apply {
+            setPadding(0, dp(5), 0, dp(4))
+        })
 
         var fetchedModels = emptyList<String>()
         val addedModels = prefs.availableModels.toMutableSet()
@@ -134,7 +147,11 @@ class SettingsActivity : AppCompatActivity() {
             modelStatus.text = "正在拉取模型…"
             worker.execute {
                 try {
-                    val models = JevClient.fetchModels(protocolIds[protocol.selectedItemPosition], key, url)
+                    val models = JevClient.fetchModels(
+                        protocolIds[protocol.selectedItemPosition], key, url,
+                        proxyUrlEdit.text.toString(), proxyUsernameEdit.text.toString(),
+                        proxyPasswordEdit.text.toString(), userAgentEdit.text.toString()
+                    )
                     main.post {
                         fetchedModels = models
                         modelStatus.text = if (models.isEmpty()) "供应商未返回可用模型" else "已拉取 ${models.size} 个模型，可一键添加"
@@ -245,6 +262,10 @@ class SettingsActivity : AppCompatActivity() {
             prefs.llmProtocol = protocolIds[protocol.selectedItemPosition]
             prefs.chatKey = chatKeyEdit.text.toString()
             prefs.chatUrl = chatUrl
+            prefs.proxyUrl = proxyUrlEdit.text.toString()
+            prefs.proxyUsername = proxyUsernameEdit.text.toString()
+            prefs.proxyPassword = proxyPasswordEdit.text.toString()
+            prefs.networkUserAgent = userAgentEdit.text.toString()
             prefs.availableModels = addedModels
             prefs.replyModel = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             prefs.relationship = relEdit.text.toString().ifBlank { Prefs.DEFAULT_REL }
@@ -277,8 +298,11 @@ class SettingsActivity : AppCompatActivity() {
                     if (other.isNotBlank()) append("；对方自述/已知MBTI=").append(other)
                     if (mine.isNotBlank() || other.isNotBlank()) append("。MBTI只作沟通风格弱参考，聊天原文优先。")
                 }
-                val a = JevClient(key, model, chatKey, chatUrl,
-                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, testRelationship)
+                val a = JevClient(
+                    key, model, chatKey, chatUrl, protocolIds[protocol.selectedItemPosition],
+                    proxyUrlEdit.text.toString(), proxyUsernameEdit.text.toString(),
+                    proxyPasswordEdit.text.toString(), userAgentEdit.text.toString()
+                ).analyzeStrict(demo, testRelationship)
                 main.post {
                     if (a.error != null) AppLog.e("连通测试", a.error)
                     else AppLog.i("连通测试", if (key.isBlank()) "大模型独立分析成功" else "Jev + 大模型分析成功")
