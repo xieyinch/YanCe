@@ -9,11 +9,12 @@ import com.jev.probe.core.RankedReply
 import com.jev.probe.core.Score
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStream
-import java.net.HttpURLConnection
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * Uses the official Jev endpoint for structured judgments and a user-configured
@@ -435,48 +436,39 @@ class JevClient(
         var attempt = 0
         var lastErr: Exception? = null
         while (attempt < 3) {
-            var conn: HttpURLConnection? = null
             try {
-                conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 15000
-                    readTimeout = 25000
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("Accept", "application/json")
-                    setRequestProperty("Accept-Encoding", "identity")
-                    setRequestProperty("Connection", "close")
-                    setRequestProperty("User-Agent", "YanCe/1.2 (Android)")
-                    when (protocol) {
-                        "gemini" -> setRequestProperty("x-goog-api-key", key)
-                        "claude" -> {
-                            setRequestProperty("x-api-key", key)
-                            setRequestProperty("anthropic-version", "2023-06-01")
-                        }
-                        else -> setRequestProperty("Authorization", "Bearer $key")
-                    }
-                }
                 val bytes = body.toString().toByteArray(Charsets.UTF_8)
-                // Some OpenAI-compatible gateways reset chunked Android requests.
-                conn.setFixedLengthStreamingMode(bytes.size)
-                conn.outputStream.use { os: OutputStream -> os.write(bytes) }
-                val code = conn.responseCode
-                if (code == 429 || code == 529) {
-                    attempt++
-                    Thread.sleep(500L * (1L shl attempt))
-                    continue
+                val request = Request.Builder().url(urlStr)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "YanCe/1.2 (Android)")
+                    .apply {
+                        when (protocol) {
+                            "gemini" -> header("x-goog-api-key", key)
+                            "claude" -> {
+                                header("x-api-key", key)
+                                header("anthropic-version", "2023-06-01")
+                            }
+                            else -> header("Authorization", "Bearer $key")
+                        }
+                    }
+                    .post(bytes.toRequestBody(JSON_MEDIA_TYPE, 0, bytes.size))
+                    .build()
+                HTTP.newCall(request).execute().use { response ->
+                    val code = response.code
+                    val text = response.body?.string().orEmpty()
+                    if (code == 429 || code == 529) {
+                        attempt++
+                        Thread.sleep(500L * (1L shl attempt))
+                        return@use
+                    }
+                    if (!response.isSuccessful) throw RuntimeException("HTTP $code: ${text.take(160)}")
+                    return JSONObject(text)
                 }
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
-                return JSONObject(text)
             } catch (e: Exception) {
                 lastErr = e
                 if (e.message?.contains("HTTP 4") == true) throw e // client error: no retry
                 attempt++
                 if (attempt < 3) Thread.sleep(500L * (1L shl attempt))
-            } finally {
-                conn?.disconnect()
             }
         }
         throw lastErr ?: RuntimeException("request failed")
@@ -497,6 +489,16 @@ class JevClient(
         private const val TAG = "JEVASSIST"
         private const val decisionsUrl = "https://api.typesafe.ai/v1/systemone"
         private const val decisionModel = "jev-latest"
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val HTTP = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(75, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
 
         /** Fetch model identifiers exposed by the configured provider. */
         fun fetchModels(protocol: String, key: String, requestUrl: String): List<String> {
@@ -526,59 +528,50 @@ class JevClient(
             }
             var lastError: Exception? = null
             repeat(3) { attempt ->
-                var conn: HttpURLConnection? = null
                 try {
-                    conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 20000
-                        readTimeout = 30000
-                        useCaches = false
-                        instanceFollowRedirects = true
-                        setRequestProperty("Accept", "application/json")
-                        setRequestProperty("Accept-Encoding", "identity")
-                        setRequestProperty("Cache-Control", "no-cache")
-                        setRequestProperty("Connection", "close")
-                        setRequestProperty("User-Agent", "YanCe/1.2 (Android; model-discovery)")
-                        when (protocol) {
-                            "gemini" -> setRequestProperty("x-goog-api-key", key)
-                            "claude" -> {
-                                setRequestProperty("x-api-key", key)
-                                setRequestProperty("anthropic-version", "2023-06-01")
+                    val request = Request.Builder().url(listUrl)
+                        .header("Accept", "application/json")
+                        .header("Cache-Control", "no-cache")
+                        .header("User-Agent", "YanCe/1.2 (Android; model-discovery)")
+                        .apply {
+                            when (protocol) {
+                                "gemini" -> header("x-goog-api-key", key)
+                                "claude" -> {
+                                    header("x-api-key", key)
+                                    header("anthropic-version", "2023-06-01")
+                                }
+                                else -> header("Authorization", "Bearer $key")
                             }
-                            else -> setRequestProperty("Authorization", "Bearer $key")
                         }
-                    }
-                    val code = conn.responseCode
-                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                    val text = stream?.let {
-                        BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
-                    }.orEmpty()
-                    if (code !in 200..299) {
-                        val error = RuntimeException("HTTP $code: ${text.take(160)}")
-                        // Authentication and malformed-address errors cannot improve by retrying.
-                        if (code in 400..499 && code != 408 && code != 429) throw error
-                        lastError = error
-                    } else {
-                        val root = JSONObject(text)
-                        val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
-                        return (0 until arr.length()).mapNotNull { i ->
-                            val item = arr.optJSONObject(i) ?: return@mapNotNull null
-                            if (protocol == "gemini") {
-                                val methods = item.optJSONArray("supportedGenerationMethods")
-                                if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
-                                    return@mapNotNull null
+                        .get().build()
+                    HTTP.newCall(request).execute().use { response ->
+                        val code = response.code
+                        val text = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) {
+                            val error = RuntimeException("HTTP $code: ${text.take(160)}")
+                            if (code in 400..499 && code != 408 && code != 429) throw error
+                            lastError = error
+                        } else {
+                            val root = JSONObject(text)
+                            val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
+                            return (0 until arr.length()).mapNotNull { i ->
+                                val item = arr.optJSONObject(i) ?: return@mapNotNull null
+                                if (protocol == "gemini") {
+                                    val methods = item.optJSONArray("supportedGenerationMethods")
+                                    if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
+                                        return@mapNotNull null
+                                }
+                                val raw = item.optString(if (protocol == "gemini") "name" else "id")
+                                raw.removePrefix("models/").takeIf { it.isNotBlank() }
                             }
-                            val raw = item.optString(if (protocol == "gemini") "name" else "id")
-                            raw.removePrefix("models/").takeIf { it.isNotBlank() }
-                        }.distinct().sorted()
+                            .distinct().sorted()
+                        }
                     }
                 } catch (e: Exception) {
                     lastError = e
                     if (e.message?.startsWith("HTTP 4") == true &&
                         e.message?.startsWith("HTTP 408") != true &&
                         e.message?.startsWith("HTTP 429") != true) throw e
-                } finally {
-                    conn?.disconnect()
                 }
                 if (attempt < 2) Thread.sleep(700L * (attempt + 1))
             }
