@@ -59,5 +59,7 @@ android {
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    // Same OkHttp core version as RikkaHub. The JVM artifact avoids forcing this
+    // small app to compile against API 37 solely for okhttp-android's AAR metadata.
+    implementation("com.squareup.okhttp3:okhttp-jvm:5.5.0")
 }
