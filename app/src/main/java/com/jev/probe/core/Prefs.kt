@@ -52,6 +52,28 @@ class Prefs(context: Context) {
         get() = sp.getString(K_REL, DEFAULT_REL) ?: DEFAULT_REL
         set(v) = sp.edit().putString(K_REL, v).apply()
 
+    /** Optional self-reported MBTI types. They are communication hints, never diagnoses. */
+    var myMbti: String
+        get() = sp.getString(K_MY_MBTI, "") ?: ""
+        set(v) = sp.edit().putString(K_MY_MBTI, normalizeMbti(v)).apply()
+
+    var otherMbti: String
+        get() = sp.getString(K_OTHER_MBTI, "") ?: ""
+        set(v) = sp.edit().putString(K_OTHER_MBTI, normalizeMbti(v)).apply()
+
+    fun relationshipContext(base: String = relationship): String {
+        val types = buildList {
+            if (myMbti.isNotBlank()) add("用户自述MBTI=$myMbti")
+            if (otherMbti.isNotBlank()) add("对方自述/已知MBTI=$otherMbti")
+        }
+        if (types.isEmpty()) return base
+        return base + "；" + types.joinToString("；") +
+            "。MBTI只用于微调表达风格、信息密度和沟通偏好，不用于推断事实、意图或给人贴标签；聊天原文优先。"
+    }
+
+    private fun normalizeMbti(value: String): String = value.trim().uppercase()
+        .takeIf { it in MBTI_TYPES } ?: ""
+
     /** Master on/off for showing the overlay + running analysis. */
     var enabled: Boolean
         get() = sp.getBoolean(K_ENABLED, true)
@@ -101,6 +123,8 @@ class Prefs(context: Context) {
     companion object {
         private const val K_REPLY_MODEL = "reply_model"
         private const val K_REL = "relationship"
+        private const val K_MY_MBTI = "my_mbti"
+        private const val K_OTHER_MBTI = "other_mbti"
         private const val K_ENABLED = "enabled"
         private const val K_WHITELIST = "whitelist"
         private const val K_OPACITY = "overlay_opacity"
@@ -110,5 +134,9 @@ class Prefs(context: Context) {
 
         const val DEFAULT_REPLY_MODEL = ""
         const val DEFAULT_REL = "对方是我的伴侣；from=me 的是我发的，from=other 的是对方发的"
+        val MBTI_TYPES = setOf(
+            "INTJ", "INTP", "ENTJ", "ENTP", "INFJ", "INFP", "ENFJ", "ENFP",
+            "ISTJ", "ISFJ", "ESTJ", "ESFJ", "ISTP", "ISFP", "ESTP", "ESFP"
+        )
     }
 }

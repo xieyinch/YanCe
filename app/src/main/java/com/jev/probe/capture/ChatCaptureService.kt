@@ -162,7 +162,7 @@ open class ChatCaptureService : AccessibilityService() {
         val client = JevClient(
             prefs.jevKey, prefs.replyModel, prefs.chatKey, prefs.chatUrl, prefs.llmProtocol
         )
-        val rel = prefs.relationship + relationshipMemory.contextFor(snapshot.title)
+        val rel = prefs.relationshipContext() + relationshipMemory.contextFor(snapshot.title)
         val requestSignature = snapshot.signature()
         AppLog.i("分析", if (prefs.hasJev()) "开始 Jev 增强分析" else "未配置 Jev，开始大模型独立分析")
         // Run in one ordered task: Jev judgment -> LLM drafting -> Jev ranking.

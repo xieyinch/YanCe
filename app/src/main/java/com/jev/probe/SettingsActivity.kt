@@ -176,6 +176,22 @@ class SettingsActivity : AppCompatActivity() {
         card2.addView(label("关系描述（给 Jev 判断用）"))
         val relEdit = edit(prefs.relationship, Prefs.DEFAULT_REL)
         card2.addView(relEdit)
+        card2.addView(label("我的 MBTI（可选）"))
+        val mbtiItems = listOf("不设置") + Prefs.MBTI_TYPES.sorted()
+        val myMbtiSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, mbtiItems)
+            setSelection(mbtiItems.indexOf(prefs.myMbti).coerceAtLeast(0))
+        }
+        card2.addView(myMbtiSpinner)
+        card2.addView(label("对方的 MBTI（可选）"))
+        val otherMbtiSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, mbtiItems)
+            setSelection(mbtiItems.indexOf(prefs.otherMbti).coerceAtLeast(0))
+        }
+        card2.addView(otherMbtiSpinner)
+        card2.addView(text("MBTI 仅用于调整表达风格和信息密度，不会代替聊天事实或判断对方意图。", 12f, sub).apply {
+            setPadding(0, dp(5), 0, dp(2))
+        })
         card2.addView(label("会话白名单（每行一个关键词，空=所有会话）"))
         val wlEdit = edit(prefs.whitelist.joinToString("\n"), "留空则对所有会话生效").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; minLines = 2
@@ -232,6 +248,8 @@ class SettingsActivity : AppCompatActivity() {
             prefs.availableModels = addedModels
             prefs.replyModel = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             prefs.relationship = relEdit.text.toString().ifBlank { Prefs.DEFAULT_REL }
+            prefs.myMbti = myMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
+            prefs.otherMbti = otherMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
             prefs.whitelist = wlEdit.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: true
             relationshipMemory.enabled = (memoryRow.tag as? Boolean) ?: false
@@ -251,8 +269,16 @@ class SettingsActivity : AppCompatActivity() {
             worker.execute {
                 val demo = ChatSnapshot("连通测试", listOf(
                     Msg("other", "在吗？"), Msg("me", "在"), Msg("other", "那你说说昨天答应我的事")))
+                val testRelationship = buildString {
+                    append(relEdit.text.toString())
+                    val mine = myMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
+                    val other = otherMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
+                    if (mine.isNotBlank()) append("；用户自述MBTI=").append(mine)
+                    if (other.isNotBlank()) append("；对方自述/已知MBTI=").append(other)
+                    if (mine.isNotBlank() || other.isNotBlank()) append("。MBTI只作沟通风格弱参考，聊天原文优先。")
+                }
                 val a = JevClient(key, model, chatKey, chatUrl,
-                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, relEdit.text.toString())
+                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, testRelationship)
                 main.post {
                     if (a.error != null) AppLog.e("连通测试", a.error)
                     else AppLog.i("连通测试", if (key.isBlank()) "大模型独立分析成功" else "Jev + 大模型分析成功")
