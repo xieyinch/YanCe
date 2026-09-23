@@ -49,8 +49,10 @@ open class ChatCaptureService : AccessibilityService() {
 
     private var lastSignature: String = ""
     private var activePkg: String? = null
+    private var activeConversation: String? = null
     private var analyzing = false
     private val debounce = Runnable { runAnalysis() }
+    private var rerunRequested = false
     private var pendingSnapshot: ChatSnapshot? = null
     @Volatile private var currentSnapshot: ChatSnapshot? = null
     private var foregroundPkg: String? = null
@@ -110,9 +112,14 @@ open class ChatCaptureService : AccessibilityService() {
         if (snapshot.messages.isEmpty()) return
         if (!prefs.isAllowed(snapshot.title)) { main.post { overlay?.hide() }; return }
 
-        // Switching to another adapted app resets the dedupe signature, so two apps
-        // whose last few messages happen to match cannot swallow each other.
-        if (pkg != activePkg) { activePkg = pkg; lastSignature = "" }
+        // A new app or conversation must not inherit the previous screen's result.
+        val conversation = "$pkg|${snapshot.title.orEmpty()}"
+        if (pkg != activePkg || conversation != activeConversation) {
+            activePkg = pkg
+            activeConversation = conversation
+            lastSignature = ""
+            main.post { overlay?.resetConversation(snapshot.title) }
+        }
 
         currentSnapshot = snapshot
         val sig = snapshot.signature()
@@ -134,18 +141,23 @@ open class ChatCaptureService : AccessibilityService() {
 
         pendingSnapshot = snapshot
         main.removeCallbacks(debounce)
-        main.postDelayed(debounce, 800) // debounce bursts of content-changed events
+        main.post { overlay?.showQueued(snapshot.title) }
+        main.postDelayed(debounce, DEBOUNCE_MS)
     }
 
     private fun runAnalysis() {
         val snapshot = pendingSnapshot ?: return
-        if (analyzing) return
+        if (analyzing) {
+            rerunRequested = true
+            return
+        }
         if (!prefs.canAnalyze()) {
             AppLog.e("分析", "未配置可用的大语言模型")
             main.post { overlay?.showError("请先配置大语言模型供应商并选择模型") }
             return
         }
         analyzing = true
+        rerunRequested = false
         main.post { overlay?.showLoading() }
         val client = JevClient(
             prefs.jevKey, prefs.replyModel, prefs.chatKey, prefs.chatUrl, prefs.llmProtocol
@@ -160,8 +172,8 @@ open class ChatCaptureService : AccessibilityService() {
             main.post {
                 if (judgment.error != null) {
                     AppLog.e("分析", judgment.error)
-                    analyzing = false
                     overlay?.showError(judgment.error)
+                    finishAnalysis(requestSignature)
                 }
                 else overlay?.showJudgment(judgment)
             }
@@ -173,16 +185,30 @@ open class ChatCaptureService : AccessibilityService() {
                 emptyList()
             }
             main.post {
-                analyzing = false
                 // Do not display replies generated for a conversation that changed mid-request.
                 if (currentSnapshot?.signature() == requestSignature) {
                     val completed = client.enrich(judgment, ranked)
                     relationshipMemory.remember(snapshot.title, completed)
                     overlay?.showReplies(completed) { text -> fillInput(text) }
-                } else {
-                    overlay?.showIdle(currentSnapshot?.title)
                 }
+                finishAnalysis(requestSignature)
             }
+        }
+    }
+
+    /** Finish one request and immediately catch up if a newer incoming message arrived. */
+    private fun finishAnalysis(finishedSignature: String) {
+        analyzing = false
+        val next = pendingSnapshot
+        val shouldRerun = next != null && next.latestFrom == "other" &&
+            (rerunRequested || next.signature() != finishedSignature)
+        rerunRequested = false
+        if (shouldRerun) {
+            main.removeCallbacks(debounce)
+            overlay?.showQueued(next?.title)
+            main.postDelayed(debounce, RERUN_DELAY_MS)
+        } else if (currentSnapshot?.signature() != finishedSignature) {
+            overlay?.showIdle(currentSnapshot?.title)
         }
     }
 
@@ -282,5 +308,7 @@ open class ChatCaptureService : AccessibilityService() {
 
     companion object {
         private const val TAG = "JEVASSIST"
+        private const val DEBOUNCE_MS = 250L
+        private const val RERUN_DELAY_MS = 120L
     }
 }

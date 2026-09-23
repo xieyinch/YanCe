@@ -16,6 +16,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -269,7 +270,16 @@ class OverlayController(private val ctx: Context) {
 
     fun showIdle(title: String?) {
         ensureRoot(); bubble?.alpha = 0.55f
-        if (lastJudgment == null) setContent(listOf(bigButton("分析当前对话") { onManualAnalyze?.invoke() }))
+        setContent(listOf(
+            stateView("助手已连接", if (title.isNullOrBlank()) "等待新消息，也可以手动分析" else "当前会话：$title", false),
+            bigButton("分析当前对话") { onManualAnalyze?.invoke() }
+        ))
+    }
+
+    fun showQueued(title: String?) {
+        ensureRoot(); bubble?.alpha = 1f
+        setContent(listOf(stateView("已识别到新消息", "正在准备分析${title?.let { " · $it" } ?: ""}", true)))
+        if (!expanded) toggle()
     }
 
     private fun bigButton(label: String, onClick: () -> Unit) = TextView(ctx).apply {
@@ -284,7 +294,7 @@ class OverlayController(private val ctx: Context) {
 
     fun showLoading() {
         ensureRoot(); bubble?.alpha = 1f
-        setContent(listOf(hint("分析中…")))
+        setContent(listOf(stateView("正在理解这段对话", "分析意图、风险与合适的回应…", true)))
         if (!expanded) toggle()
     }
 
@@ -292,7 +302,9 @@ class OverlayController(private val ctx: Context) {
         ensureRoot(); bubble?.alpha = 1f
         setContent(listOf(
             line("出错了", "#DC2626", 14f, true),
-            hint(msg)))
+            hint(msg),
+            reAnalyzeBtn()))
+        if (!expanded) toggle()
     }
 
     fun showJudgment(a: Analysis) {
@@ -313,6 +325,12 @@ class OverlayController(private val ctx: Context) {
         val r = root ?: return
         runCatching { wm.removeView(r) }
         root = null; bubble = null; panel = null; contentBox = null; dangerDot = null; expanded = false
+        lastJudgment = null; lastFill = null
+    }
+
+    fun resetConversation(title: String?) {
+        lastJudgment = null; lastFill = null
+        if (isShowing()) showIdle(title)
     }
 
     // --------------------------------------------------------------- rendering
@@ -320,6 +338,25 @@ class OverlayController(private val ctx: Context) {
     private fun setContent(views: List<View>) {
         val c = contentBox ?: return
         c.removeAllViews(); views.forEach { c.addView(it) }
+    }
+
+    private fun stateView(title: String, subtitle: String, loading: Boolean): View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        background = card(14, Color.parseColor("#F7F8FA"))
+        setPadding(dp(12), dp(12), dp(12), dp(12))
+        if (loading) addView(ProgressBar(ctx).apply { isIndeterminate = true },
+            LinearLayout.LayoutParams(dp(26), dp(26)).apply { rightMargin = dp(11) })
+        else addView(View(ctx).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(YanCeUi.MINT) }
+        }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { rightMargin = dp(12) })
+        addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(line(title, "#171A3A", 14f, true))
+            addView(line(subtitle, "#747B98", 12f))
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        }
     }
 
     private fun render(a: Analysis, generating: Boolean) {
