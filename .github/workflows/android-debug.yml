@@ -20,7 +20,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+      - run: sdkmanager --channel=3 'platforms;android-37' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - run: bash gradlew :app:assembleDebug
       - name: Prepare APK
