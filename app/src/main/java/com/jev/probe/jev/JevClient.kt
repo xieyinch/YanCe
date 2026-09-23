@@ -11,13 +11,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Credentials
+import okhttp3.Dns
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.InetSocketAddress
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.Proxy
 import java.net.URI
 import java.net.URL
+import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -506,12 +511,22 @@ class JevClient(
             userAgent: String = ""
         ): OkHttpClient {
             val builder = OkHttpClient.Builder()
-                .connectTimeout(20, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.MINUTES)
                 .writeTimeout(120, TimeUnit.SECONDS)
+                .callTimeout(75, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .followRedirects(true)
                 .followSslRedirects(true)
+                // Several Chinese relay/CDN routes advertise IPv6 but reset the
+                // TLS socket on mobile networks. Rikka-compatible clients prefer
+                // the working IPv4 route and HTTP/1.1 for these providers.
+                .dns(object : Dns {
+                    @Throws(UnknownHostException::class)
+                    override fun lookup(hostname: String): List<InetAddress> =
+                        Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
+                })
+                .protocols(listOf(Protocol.HTTP_1_1))
                 .addInterceptor { chain ->
                     val original = chain.request()
                     val request = original.newBuilder()
@@ -590,6 +605,7 @@ class JevClient(
                 }
             }
             var lastError: Exception? = null
+            AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，IPv4 优先 + HTTP/1.1")
             repeat(3) { attempt ->
                 try {
                     val request = Request.Builder().url(listUrl)
@@ -607,6 +623,7 @@ class JevClient(
                     http.newCall(request).execute().use { response ->
                         val code = response.code
                         val text = response.body?.string().orEmpty()
+                        AppLog.i("模型拉取", "第 ${attempt + 1} 次返回 HTTP $code")
                         if (!response.isSuccessful) {
                             val error = RuntimeException("HTTP $code: ${text.take(160)}")
                             if (code in 400..499 && code != 408 && code != 429) throw error
