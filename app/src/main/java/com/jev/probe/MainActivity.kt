@@ -67,11 +67,11 @@ class MainActivity : AppCompatActivity() {
 
         val a11y = isA11yEnabled()
         val overlay = Settings.canDrawOverlays(this)
-        val key = prefs.hasKey()
-        val ready = a11y && overlay && key
+        val modelReady = prefs.canAnalyze()
+        val ready = a11y && overlay && modelReady
 
         // Readiness card
-        container.addView(statusCard(ready, a11y, overlay, key))
+        container.addView(statusCard(ready, a11y, overlay, modelReady))
 
         // Permission checklist
         container.addView(sectionLabel("权限设置"))
@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------- cards
 
-    private fun statusCard(ready: Boolean, a11y: Boolean, overlay: Boolean, key: Boolean): View {
+    private fun statusCard(ready: Boolean, a11y: Boolean, overlay: Boolean, modelReady: Boolean): View {
         val c = cardBox()
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         head.addView(dot(if (ready) green else red).apply {
@@ -114,7 +114,7 @@ class MainActivity : AppCompatActivity() {
         c.addView(head)
         c.addView(checkLine("无障碍", a11y))
         c.addView(checkLine("悬浮窗", overlay))
-        c.addView(checkLine("密钥", key, okWord = "已设", noWord = "未设"))
+        c.addView(checkLine("大模型", modelReady, okWord = "已配置", noWord = "未配置"))
         return c
     }
 

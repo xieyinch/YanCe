@@ -1,6 +1,7 @@
 package com.jev.probe.jev
 
 import android.util.Log
+import com.jev.probe.core.AppLog
 import com.jev.probe.core.Analysis
 import com.jev.probe.core.ChatSnapshot
 import com.jev.probe.core.Choice
@@ -33,6 +34,7 @@ class JevClient(
 
     /** The 7 judgment questions only (fast, ~1s). No candidate generation. */
     fun judge(snapshot: ChatSnapshot, relationship: String): Analysis {
+        if (decisionKey.isBlank()) return judgeWithLlm(snapshot, relationship)
         val start = System.currentTimeMillis()
         try {
             val body = JSONObject()
@@ -53,6 +55,7 @@ class JevClient(
             )
         } catch (e: Exception) {
             Log.w(TAG, "judge failed: ${e.message}")
+            AppLog.e("Jev判断", "请求失败", e)
             return Analysis(null, null, null, null, null, null, null, emptyList(),
                 System.currentTimeMillis() - start, error = readableError(e))
         }
@@ -64,6 +67,7 @@ class JevClient(
         relationship: String,
         judgment: Analysis
     ): List<RankedReply> {
+        if (decisionKey.isBlank()) return judgment.rankedReplies
         val candidates = generateCandidates(snapshot, relationship, judgment)
         val questions = JSONObject().put("best_reply",
             JevQuestions.rankQuestion(candidates).getJSONObject("best_reply"))
@@ -94,6 +98,71 @@ class JevClient(
         }
     }
 
+    /** Full fallback when no Jev key is configured: one LLM call returns judgments and replies. */
+    private fun judgeWithLlm(snapshot: ChatSnapshot, relationship: String): Analysis {
+        val start = System.currentTimeMillis()
+        return try {
+            val convo = snapshot.messages.takeLast(10).joinToString("\n") {
+                (if (it.side == "me") "我" else "对方") + "：" + it.text
+            }
+            val system = if (analysisMode == "relationship") {
+                "你是谨慎、清醒的中文关系沟通助手。先识别情绪和真实需求，严格区分事实、合理推测和未知；" +
+                    "优先考虑互惠、可靠性、边界与长期信任；不得编造事实，不得设计施压、纠缠或操控话术。" +
+                    "完成结构化判断并生成回复，只输出一个JSON对象，不要Markdown。"
+            } else {
+                "你是中文即时通讯分析与回复助手。根据聊天原文完成结构化判断并生成自然回复。" +
+                    "不编造事实或承诺，只输出一个JSON对象，不要Markdown。"
+            }
+            val user = "关系：" + relationship + "\n\n最近对话：\n" + convo +
+                "\n\n返回字段：true_intent只能是confirm_you_care、vent_anger、request_action、" +
+                "seek_explanation、casual_chat、close_topic之一；danger_level为0到9数字；" +
+                "need只能是apology、action、explanation、care、nothing之一；" +
+                "best_action只能是check_history、apologize、give_commitment、explain、acknowledge、" +
+                "say_less、make_plan之一；should_reply_now、tension_resolved、literal_question为布尔值；" +
+                "replies为恰好3条可直接发送、策略不同的中文回复。格式：" +
+                "{\"true_intent\":\"casual_chat\",\"danger_level\":0,\"need\":\"nothing\"," +
+                "\"best_action\":\"acknowledge\",\"should_reply_now\":true," +
+                "\"tension_resolved\":true,\"literal_question\":true,\"replies\":[\"...\",\"...\",\"...\"]}"
+            val root = parseObject(callChat(system, user))
+            val replies = parseReplyArray(root.optJSONArray("replies"))
+            AppLog.i("分析", "未配置Jev，已使用大语言模型独立分析")
+            Analysis(
+                trueIntent = fallbackChoice(root.optString("true_intent", "casual_chat")),
+                dangerLevel = Score(root.optDouble("danger_level", 0.0).coerceIn(0.0, 9.0), 0.65, 9),
+                sheNeeds = fallbackChoice(root.optString("need", "nothing")),
+                shouldReplyNow = if (root.optBoolean("should_reply_now", true)) 1.0 else 0.0,
+                bestAction = fallbackChoice(root.optString("best_action", "acknowledge")),
+                tensionResolved = if (root.optBoolean("tension_resolved", false)) 1.0 else 0.0,
+                literalQuestion = if (root.optBoolean("literal_question", false)) 1.0 else 0.0,
+                rankedReplies = replies.mapIndexed { i, text ->
+                    RankedReply(text, listOf(0.60, 0.30, 0.10).getOrElse(i) { 0.0 })
+                },
+                latencyMs = System.currentTimeMillis() - start
+            )
+        } catch (e: Exception) {
+            AppLog.e("大模型独立分析", "请求或JSON解析失败", e)
+            Analysis(null, null, null, null, null, null, null, emptyList(),
+                System.currentTimeMillis() - start, error = readableError(e))
+        }
+    }
+
+    private fun fallbackChoice(value: String) = Choice(value, 0.65, mapOf(value to 0.65))
+
+    private fun parseObject(content: String): JSONObject {
+        val start = content.indexOf('{')
+        val end = content.lastIndexOf('}')
+        require(start >= 0 && end > start) { "模型未返回JSON对象" }
+        return JSONObject(content.substring(start, end + 1))
+    }
+
+    private fun parseReplyArray(array: JSONArray?): List<String> {
+        require(array != null) { "模型未返回候选回复" }
+        val out = (0 until array.length()).map { array.optString(it).trim() }
+            .filter { it.isNotBlank() }.take(3).toMutableList()
+        while (out.size < 3) out.add("我先想一下，等会认真回你。")
+        return out
+    }
+
     /** Ask a generative model for exactly 3 varied candidate replies (Chinese). */
     private fun generateCandidates(
         snapshot: ChatSnapshot,
@@ -108,29 +177,34 @@ class JevClient(
         val user = "关系：$relationship\n\n最近对话：\n$convo\n\nJev结构化判断：\n$jevContext\n\n" +
             "请以聊天原文为事实边界，并参考Jev判断给出3条候选回复。Jev判断只是辅助，" +
             "若它与原文明显冲突，应以原文为准。"
+        return parseThree(callChat(sys, user))
+    }
+
+    private fun callChat(system: String, user: String): String {
         require(replyModel.isNotBlank()) { "请先选择一个回复模型" }
         require(chatUrl.isNotBlank()) { "请填写大语言模型请求地址" }
-        val content = when (chatProtocol) {
+        require(chatKey.isNotBlank()) { "请填写大语言模型 Key" }
+        return when (chatProtocol) {
             "gemini" -> {
                 val url = chatUrl.replace("{model}", replyModel)
                 val body = JSONObject().put("contents", JSONArray().put(JSONObject()
                     .put("role", "user")
-                    .put("parts", JSONArray().put(JSONObject().put("text", "$sys\n\n$user")))))
+                    .put("parts", JSONArray().put(JSONObject().put("text", system + "\n\n" + user)))))
                     .put("generationConfig", JSONObject().put("temperature", 0.8))
                 val resp = postJson(url, body, chatKey, "gemini")
                 resp.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
                     ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: ""
             }
             "claude" -> {
-                val body = JSONObject().put("model", replyModel).put("max_tokens", 500)
-                    .put("system", sys).put("messages", JSONArray().put(JSONObject()
+                val body = JSONObject().put("model", replyModel).put("max_tokens", 700)
+                    .put("system", system).put("messages", JSONArray().put(JSONObject()
                         .put("role", "user").put("content", user)))
                 val resp = postJson(chatUrl, body, chatKey, "claude")
                 resp.optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: ""
             }
             else -> {
                 val messages = JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", sys))
+                    .put(JSONObject().put("role", "system").put("content", system))
                     .put(JSONObject().put("role", "user").put("content", user))
                 val body = JSONObject().put("model", replyModel).put("messages", messages)
                     .put("temperature", 0.8)
@@ -139,7 +213,6 @@ class JevClient(
                     ?.optJSONObject("message")?.optString("content") ?: ""
             }
         }
-        return parseThree(content)
     }
 
     private fun buildJevContext(a: Analysis): String = listOf(

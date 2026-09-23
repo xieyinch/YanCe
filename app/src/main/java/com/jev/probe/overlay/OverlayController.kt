@@ -346,7 +346,7 @@ class OverlayController(private val ctx: Context) {
         a.tensionResolved?.let { if (it >= 0.7) views.add(line("✓ 紧张已缓解", "#16A34A", 12f)) }
 
         views.add(divider())
-        views.add(line("候选回复（Jev 排序）", "#9CA3AF", 12f))
+        views.add(line("候选回复（智能排序）", "#9CA3AF", 12f))
         if (generating) {
             views.add(hint("生成中…"))
         } else {

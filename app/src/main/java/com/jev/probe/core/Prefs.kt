@@ -97,7 +97,11 @@ class Prefs(context: Context) {
         return wl.any { title.contains(it) }
     }
 
-    fun hasKey(): Boolean = jevKey.isNotBlank() && chatKey.isNotBlank()
+    /** A configured text model is sufficient; Jev is an optional quality upgrade. */
+    fun canAnalyze(): Boolean =
+        chatKey.isNotBlank() && chatUrl.isNotBlank() && replyModel.isNotBlank()
+
+    fun hasJev(): Boolean = jevKey.isNotBlank()
 
     companion object {
         private const val K_REPLY_MODEL = "reply_model"

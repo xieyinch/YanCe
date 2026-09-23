@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.jev.probe.core.ChatSnapshot
+import com.jev.probe.core.AppLog
 import com.jev.probe.core.Prefs
 import com.jev.probe.jev.JevClient
 import com.jev.probe.overlay.OverlayController
@@ -54,6 +55,7 @@ open class ChatCaptureService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        AppLog.init(this)
         prefs = Prefs(this)
         overlay = OverlayController(this)
         overlay?.onManualAnalyze = {
@@ -66,6 +68,7 @@ open class ChatCaptureService : AccessibilityService() {
         // instead of waiting for the user to scroll.
         main.postDelayed({ if (prefs.enabled) runCatching { maybeCapture() } }, 900)
         Log.i(TAG, "capture service connected")
+        AppLog.i("无障碍服务", "服务已连接")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -134,7 +137,11 @@ open class ChatCaptureService : AccessibilityService() {
     private fun runAnalysis() {
         val snapshot = pendingSnapshot ?: return
         if (analyzing) return
-        if (!prefs.hasKey()) { main.post { overlay?.showError("请先设置 JEV Key 和大语言模型供应商") }; return }
+        if (!prefs.canAnalyze()) {
+            AppLog.e("分析", "未配置可用的大语言模型")
+            main.post { overlay?.showError("请先配置大语言模型供应商并选择模型") }
+            return
+        }
         analyzing = true
         main.post { overlay?.showLoading() }
         val client = JevClient(
@@ -143,16 +150,26 @@ open class ChatCaptureService : AccessibilityService() {
         )
         val rel = prefs.relationship
         val requestSignature = snapshot.signature()
+        AppLog.i("分析", if (prefs.hasJev()) "开始 Jev 增强分析" else "未配置 Jev，开始大模型独立分析")
         // Run in one ordered task: Jev judgment -> LLM drafting -> Jev ranking.
         // This prevents the drafting model from guessing the situation without Jev's result.
         submit {
             val judgment = client.judge(snapshot, rel)
             main.post {
-                if (judgment.error != null) { analyzing = false; overlay?.showError(judgment.error) }
+                if (judgment.error != null) {
+                    AppLog.e("分析", judgment.error)
+                    analyzing = false
+                    overlay?.showError(judgment.error)
+                }
                 else overlay?.showJudgment(judgment)
             }
             if (judgment.error != null) return@submit
-            val ranked = try { client.draftAndRank(snapshot, rel, judgment) } catch (e: Exception) { emptyList() }
+            val ranked = try {
+                client.draftAndRank(snapshot, rel, judgment)
+            } catch (e: Exception) {
+                AppLog.e("候选回复", "生成或排序失败", e)
+                emptyList()
+            }
             main.post {
                 analyzing = false
                 // Do not display replies generated for a conversation that changed mid-request.

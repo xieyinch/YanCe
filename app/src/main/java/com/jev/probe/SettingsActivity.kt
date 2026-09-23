@@ -1,5 +1,6 @@
 package com.jev.probe
 
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -20,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.jev.probe.core.ChatSnapshot
+import com.jev.probe.core.AppLog
 import com.jev.probe.core.Msg
 import com.jev.probe.core.Prefs
 import com.jev.probe.jev.JevClient
@@ -41,6 +43,7 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         prefs = Prefs(this)
         window.decorView.setBackgroundColor(Color.parseColor("#F2F3F5"))
 
@@ -59,7 +62,7 @@ class SettingsActivity : AppCompatActivity() {
         card1.addView(label("JEV Key"))
         val jevKeyEdit = edit(prefs.jevKey, "只需填写 Key，接口与模型已内置", password = true)
         card1.addView(jevKeyEdit)
-        card1.addView(text("JEV 负责理解对话与排序；自定义大语言模型负责生成回复。", 12f, sub).apply {
+        card1.addView(text("JEV 可选：填写后负责判断与排序；留空时自动使用下方大语言模型完成全部分析。", 12f, sub).apply {
             setPadding(0, dp(6), 0, dp(8))
         })
         card1.addView(label("自定义供应商名称"))
@@ -202,7 +205,7 @@ class SettingsActivity : AppCompatActivity() {
             val chatKey = chatKeyEdit.text.toString().trim()
             val model = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             val chatUrl = chatUrlEdit.text.toString().trim()
-            if (key.isBlank() || chatKey.isBlank() || model.isBlank()) { result.text = "请填写两个 Key 并选择模型"; return@secondaryBtn }
+            if (chatKey.isBlank() || model.isBlank()) { result.text = "请填写大语言模型 Key 并选择模型"; return@secondaryBtn }
             if (!validEndpoint(chatUrl)) {
                 result.text = "请求地址须为完整 HTTPS URL"; return@secondaryBtn
             }
@@ -214,12 +217,23 @@ class SettingsActivity : AppCompatActivity() {
                     protocolIds[protocol.selectedItemPosition],
                     analysisModeIds[analysisMode.selectedItemPosition]).analyzeStrict(demo, relEdit.text.toString())
                 main.post {
-                    result.text = if (a.error != null) "失败：${a.error}"
-                    else "成功：意图=${a.trueIntent?.choice ?: "?"}，候选=${a.rankedReplies.size} 条，耗时 ${a.latencyMs}ms"
+                    if (a.error != null) AppLog.e("连通测试", a.error)
+                    else AppLog.i("连通测试", if (key.isBlank()) "大模型独立分析成功" else "Jev + 大模型分析成功")
+                    result.text = if (a.error != null) "失败：" + a.error
+                    else "成功（" + (if (key.isBlank()) "大模型独立分析" else "Jev增强") +
+                        "）：意图=" + (a.trueIntent?.choice ?: "?") + "，候选=" + a.rankedReplies.size + " 条"
                 }
             }
         })
         root.addView(result)
+
+        root.addView(section("诊断"))
+        val logCard = card()
+        logCard.addView(text("遇到接口或解析问题时，可在运行日志中查看时间、处理阶段和错误原因。日志不会保存聊天原文或密钥。", 12f, sub))
+        logCard.addView(secondaryBtn("查看运行日志") {
+            startActivity(Intent(this, LogActivity::class.java))
+        })
+        root.addView(logCard)
 
         setContentView(scroll)
     }
