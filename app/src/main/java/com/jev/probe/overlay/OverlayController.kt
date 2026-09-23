@@ -300,9 +300,9 @@ class OverlayController(private val ctx: Context) {
         render(a, generating = true)
     }
 
-    fun showReplies(ranked: List<RankedReply>, onFill: (String) -> Unit) {
+    fun showReplies(analysis: Analysis, onFill: (String) -> Unit) {
         lastFill = onFill
-        val a = lastJudgment?.copy(rankedReplies = ranked) ?: return
+        val a = analysis
         lastJudgment = a
         render(a, generating = false)
     }
@@ -327,6 +327,11 @@ class OverlayController(private val ctx: Context) {
         panel?.background = card(18, panelBg(), stroke = true) // re-apply in case opacity changed
         val views = ArrayList<View>()
 
+        a.emotionSupport?.let {
+            views.add(line(it, "#171A3A", 14f, true))
+            views.add(divider())
+        }
+
         // Danger badge — the alarm signal, up top and color-coded.
         a.dangerLevel?.let {
             val lvl = it.score.roundToInt()
@@ -346,6 +351,11 @@ class OverlayController(private val ctx: Context) {
         if (bits.isNotEmpty()) views.add(line(bits.joinToString("  ·  "), "#374151", 13f))
         a.tensionResolved?.let { if (it >= 0.7) views.add(line("✓ 紧张已缓解", "#16A34A", 12f)) }
 
+        a.roundGoal?.let { views.add(tagLine("本轮目标", it)) }
+        if (a.facts.isNotEmpty()) views.add(detailBlock("能确认", a.facts.joinToString("；")))
+        a.inference?.let { views.add(detailBlock("暂时推测", it)) }
+        a.unknown?.let { views.add(detailBlock("仍不知道", it)) }
+
         views.add(divider())
         views.add(line("候选回复（智能排序）", "#9CA3AF", 12f))
         if (generating) {
@@ -356,6 +366,15 @@ class OverlayController(private val ctx: Context) {
                 views.add(replyCard(i + 1, r.text, (r.prob * 100).roundToInt(), fill))
             }
             if (a.rankedReplies.isEmpty()) views.add(hint("（未生成候选回复）"))
+        }
+        a.nextStep?.let { views.add(detailBlock("下一步", it)) }
+        a.stopCondition?.let { views.add(detailBlock("停止条件", it)) }
+        if (!generating && listOf(a.positiveBranch, a.ambiguousBranch, a.negativeBranch).any { it != null }) {
+            views.add(divider())
+            views.add(line("对方接下来如果…", "#747B98", 12f, true))
+            a.positiveBranch?.let { views.add(branchLine("积极", it, "#159A83")) }
+            a.ambiguousBranch?.let { views.add(branchLine("含糊", it, "#D97706")) }
+            a.negativeBranch?.let { views.add(branchLine("拒绝", it, "#D45665")) }
         }
         views.add(reAnalyzeBtn())
 
@@ -426,6 +445,25 @@ class OverlayController(private val ctx: Context) {
         setTextColor(Color.parseColor("#6B7280"))
         setPadding(dp(10), dp(10), dp(10), dp(4))
         setOnClickListener { onManualAnalyze?.invoke() }
+    }
+
+    private fun tagLine(label: String, value: String) = TextView(ctx).apply {
+        text = "$label · $value"; textSize = 12f; setTextColor(YanCeUi.SUCCESS)
+        setTypeface(typeface, Typeface.BOLD); background = card(16, YanCeUi.MINT_SOFT)
+        setPadding(dp(10), dp(6), dp(10), dp(6))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        }
+    }
+
+    private fun detailBlock(label: String, value: String) = TextView(ctx).apply {
+        text = "$label｜$value"; textSize = 12f; setTextColor(Color.parseColor("#4B526F"))
+        setPadding(0, dp(5), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+    }
+
+    private fun branchLine(label: String, value: String, color: String) = TextView(ctx).apply {
+        text = "$label：$value"; textSize = 12f; setTextColor(Color.parseColor(color))
+        setPadding(0, dp(5), 0, 0)
     }
 
     private fun tintBubbleDanger(score: Double) {

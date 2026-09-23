@@ -32,6 +32,21 @@ class JevClient(
     private val analysisMode: String = "relationship"
 ) {
 
+    private data class Coaching(
+        val emotion: String? = null,
+        val facts: List<String> = emptyList(),
+        val inference: String? = null,
+        val unknown: String? = null,
+        val goal: String? = null,
+        val nextStep: String? = null,
+        val stopCondition: String? = null,
+        val positive: String? = null,
+        val ambiguous: String? = null,
+        val negative: String? = null
+    )
+
+    private var latestCoaching = Coaching()
+
     /** The 7 judgment questions only (fast, ~1s). No candidate generation. */
     fun judge(snapshot: ChatSnapshot, relationship: String): Analysis {
         if (decisionKey.isBlank()) return judgeWithLlm(snapshot, relationship)
@@ -79,12 +94,26 @@ class JevClient(
         return parseRanked(answers.optJSONObject("best_reply"), candidates)
     }
 
+    fun enrich(judgment: Analysis, ranked: List<RankedReply>): Analysis = judgment.copy(
+        rankedReplies = ranked,
+        emotionSupport = latestCoaching.emotion,
+        facts = latestCoaching.facts,
+        inference = latestCoaching.inference,
+        unknown = latestCoaching.unknown,
+        roundGoal = latestCoaching.goal,
+        nextStep = latestCoaching.nextStep,
+        stopCondition = latestCoaching.stopCondition,
+        positiveBranch = latestCoaching.positive,
+        ambiguousBranch = latestCoaching.ambiguous,
+        negativeBranch = latestCoaching.negative
+    )
+
     /** Convenience for the settings connectivity test: judge + replies, sequential. */
     fun analyze(snapshot: ChatSnapshot, relationship: String): Analysis {
         val a = judge(snapshot, relationship)
         if (a.error != null) return a
         val ranked = try { draftAndRank(snapshot, relationship, a) } catch (e: Exception) { emptyList() }
-        return a.copy(rankedReplies = ranked)
+        return enrich(a, ranked)
     }
 
     /** Connectivity test that fails when either Jev or the text model fails. */
@@ -92,7 +121,7 @@ class JevClient(
         val a = judge(snapshot, relationship)
         if (a.error != null) return a
         return try {
-            a.copy(rankedReplies = draftAndRank(snapshot, relationship, a))
+            enrich(a, draftAndRank(snapshot, relationship, a))
         } catch (e: Exception) {
             a.copy(error = readableError(e))
         }
@@ -119,12 +148,19 @@ class JevClient(
                 "need只能是apology、action、explanation、care、nothing之一；" +
                 "best_action只能是check_history、apologize、give_commitment、explain、acknowledge、" +
                 "say_less、make_plan之一；should_reply_now、tension_resolved、literal_question为布尔值；" +
-                "replies为恰好3条可直接发送、策略不同的中文回复。格式：" +
+                "emotion为对用户的1句情绪承接；facts为最多3条原文可确认事实；inference为1条暂定解释；" +
+                "unknown为1条关键未知；goal只能是承接、降压、调侃、轻推、约见、澄清、收线之一；" +
+                "next_step为现在能做的小动作；stop_condition为停止或改策略的条件；" +
+                "branches包含positive、ambiguous、negative三种后续动作；replies为恰好3条可直接发送、策略不同的中文回复。格式：" +
                 "{\"true_intent\":\"casual_chat\",\"danger_level\":0,\"need\":\"nothing\"," +
                 "\"best_action\":\"acknowledge\",\"should_reply_now\":true," +
-                "\"tension_resolved\":true,\"literal_question\":true,\"replies\":[\"...\",\"...\",\"...\"]}"
+                "\"tension_resolved\":true,\"literal_question\":true,\"emotion\":\"...\",\"facts\":[\"...\"]," +
+                "\"inference\":\"...\",\"unknown\":\"...\",\"goal\":\"承接\",\"next_step\":\"...\"," +
+                "\"stop_condition\":\"...\",\"branches\":{\"positive\":\"...\",\"ambiguous\":\"...\",\"negative\":\"...\"}," +
+                "\"replies\":[\"...\",\"...\",\"...\"]}"
             val root = parseObject(callChat(system, user))
             val replies = parseReplyArray(root.optJSONArray("replies"))
+            latestCoaching = parseCoaching(root)
             AppLog.i("分析", "未配置Jev，已使用大语言模型独立分析")
             Analysis(
                 trueIntent = fallbackChoice(root.optString("true_intent", "casual_chat")),
@@ -137,7 +173,17 @@ class JevClient(
                 rankedReplies = replies.mapIndexed { i, text ->
                     RankedReply(text, listOf(0.60, 0.30, 0.10).getOrElse(i) { 0.0 })
                 },
-                latencyMs = System.currentTimeMillis() - start
+                latencyMs = System.currentTimeMillis() - start,
+                emotionSupport = latestCoaching.emotion,
+                facts = latestCoaching.facts,
+                inference = latestCoaching.inference,
+                unknown = latestCoaching.unknown,
+                roundGoal = latestCoaching.goal,
+                nextStep = latestCoaching.nextStep,
+                stopCondition = latestCoaching.stopCondition,
+                positiveBranch = latestCoaching.positive,
+                ambiguousBranch = latestCoaching.ambiguous,
+                negativeBranch = latestCoaching.negative
             )
         } catch (e: Exception) {
             AppLog.e("大模型独立分析", "请求或JSON解析失败", e)
@@ -177,7 +223,13 @@ class JevClient(
         val user = "关系：$relationship\n\n最近对话：\n$convo\n\nJev结构化判断：\n$jevContext\n\n" +
             "请以聊天原文为事实边界，并参考Jev判断给出3条候选回复。Jev判断只是辅助，" +
             "若它与原文明显冲突，应以原文为准。"
-        return parseThree(callChat(sys, user))
+        val content = callChat(sys, user)
+        if (analysisMode == "relationship") {
+            val root = parseObject(content)
+            latestCoaching = parseCoaching(root)
+            return parseReplyArray(root.optJSONArray("replies"))
+        }
+        return parseThree(content)
     }
 
     private fun callChat(system: String, user: String): String {
@@ -246,16 +298,36 @@ class JevClient(
      * communication practice. It intentionally does not embed third-party documents.
      */
     private val relationshipCoachPrompt: String
-        get() = "你是谨慎、清醒的中文关系沟通助手。先在内部完成判断，再只输出结果。" +
+        get() = "你是谨慎、清醒、站在用户一边的中文关系沟通助手。先接住用户情绪，再完成判断。" +
             "判断时必须：1.先识别对方情绪和真正需求；2.严格区分聊天能确认的事实、合理推测和未知，" +
             "禁止读心；3.优先考虑互惠、可靠性、边界、现实可行性和长期信任；" +
             "4.明确拒绝、不适或持续缺乏回应时，不设计施压、纠缠、贬低、试探或操控话术；" +
             "5.信息不足时选择澄清或简短承接，不假装记得、不虚构理由；" +
             "6.避免替用户做重大决定或过度承诺。" +
-            "最后只输出一个 JSON 数组，含且仅含3条可以直接发送的中文回复：" +
+            "先提取：emotion一句情绪承接；facts最多3条原文事实；inference一条暂定推测；unknown一条关键未知；" +
+            "goal只选承接、降压、调侃、轻推、约见、澄清、收线之一；next_step一个小动作；stop_condition停止条件；" +
+            "branches给出positive、ambiguous、negative三种回应下各一个后续动作。" +
+            "再生成含且仅含3条可以直接发送的中文回复：" +
             "第一条稳妥共情并承接核心需求；第二条在事实充分时给具体行动，否则礼貌澄清；" +
             "第三条简短自然并保留双方空间。三条策略必须不同，每条不超过50字，像真人聊天。" +
-            "不要输出分析、标题、Markdown或数组以外内容。"
+            "只输出JSON对象，字段为emotion、facts、inference、unknown、goal、next_step、stop_condition、branches、replies。" +
+            "不要输出Markdown。"
+
+    private fun parseCoaching(root: JSONObject): Coaching {
+        fun value(name: String): String? = root.optString(name).trim().takeIf { it.isNotBlank() }
+        val factArray = root.optJSONArray("facts")
+        val facts = if (factArray == null) emptyList() else (0 until factArray.length())
+            .map { factArray.optString(it).trim() }.filter { it.isNotBlank() }.take(3)
+        val branches = root.optJSONObject("branches")
+        return Coaching(
+            emotion = value("emotion"), facts = facts, inference = value("inference"),
+            unknown = value("unknown"), goal = value("goal"), nextStep = value("next_step"),
+            stopCondition = value("stop_condition"),
+            positive = branches?.optString("positive")?.trim()?.takeIf { it.isNotBlank() },
+            ambiguous = branches?.optString("ambiguous")?.trim()?.takeIf { it.isNotBlank() },
+            negative = branches?.optString("negative")?.trim()?.takeIf { it.isNotBlank() }
+        )
+    }
 
     private fun parseThree(content: String): List<String> {
         val start = content.indexOf('[')

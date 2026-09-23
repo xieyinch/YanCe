@@ -174,7 +174,7 @@ open class ChatCaptureService : AccessibilityService() {
                 analyzing = false
                 // Do not display replies generated for a conversation that changed mid-request.
                 if (currentSnapshot?.signature() == requestSignature) {
-                    overlay?.showReplies(ranked) { text -> fillInput(text) }
+                    overlay?.showReplies(client.enrich(judgment, ranked)) { text -> fillInput(text) }
                 } else {
                     overlay?.showIdle(currentSnapshot?.title)
                 }
