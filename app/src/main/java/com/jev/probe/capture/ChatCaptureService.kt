@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.jev.probe.core.ChatSnapshot
 import com.jev.probe.core.AppLog
 import com.jev.probe.core.Prefs
+import com.jev.probe.core.RelationshipMemory
 import com.jev.probe.jev.JevClient
 import com.jev.probe.overlay.OverlayController
 import java.util.concurrent.Executors
@@ -43,6 +44,7 @@ open class ChatCaptureService : AccessibilityService() {
         try { worker.execute(task) } catch (_: RejectedExecutionException) { }
     }
     private lateinit var prefs: Prefs
+    private lateinit var relationshipMemory: RelationshipMemory
     private var overlay: OverlayController? = null
 
     private var lastSignature: String = ""
@@ -57,6 +59,7 @@ open class ChatCaptureService : AccessibilityService() {
         super.onServiceConnected()
         AppLog.init(this)
         prefs = Prefs(this)
+        relationshipMemory = RelationshipMemory(this)
         overlay = OverlayController(this)
         overlay?.onManualAnalyze = {
             currentSnapshot?.let { pendingSnapshot = it; runAnalysis() }
@@ -148,7 +151,7 @@ open class ChatCaptureService : AccessibilityService() {
             prefs.jevKey, prefs.replyModel, Prefs.JEV_URL, Prefs.JEV_MODEL,
             prefs.chatKey, prefs.chatUrl, prefs.llmProtocol, prefs.analysisMode
         )
-        val rel = prefs.relationship
+        val rel = prefs.relationship + relationshipMemory.contextFor(snapshot.title)
         val requestSignature = snapshot.signature()
         AppLog.i("分析", if (prefs.hasJev()) "开始 Jev 增强分析" else "未配置 Jev，开始大模型独立分析")
         // Run in one ordered task: Jev judgment -> LLM drafting -> Jev ranking.
@@ -174,7 +177,9 @@ open class ChatCaptureService : AccessibilityService() {
                 analyzing = false
                 // Do not display replies generated for a conversation that changed mid-request.
                 if (currentSnapshot?.signature() == requestSignature) {
-                    overlay?.showReplies(client.enrich(judgment, ranked)) { text -> fillInput(text) }
+                    val completed = client.enrich(judgment, ranked)
+                    relationshipMemory.remember(snapshot.title, completed)
+                    overlay?.showReplies(completed) { text -> fillInput(text) }
                 } else {
                     overlay?.showIdle(currentSnapshot?.title)
                 }

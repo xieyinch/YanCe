@@ -24,6 +24,7 @@ import com.jev.probe.core.ChatSnapshot
 import com.jev.probe.core.AppLog
 import com.jev.probe.core.Msg
 import com.jev.probe.core.Prefs
+import com.jev.probe.core.RelationshipMemory
 import com.jev.probe.jev.JevClient
 import com.jev.probe.ui.YanCeUi
 import java.util.concurrent.Executors
@@ -168,6 +169,20 @@ class SettingsActivity : AppCompatActivity() {
         card2.addView(autoRow)
         root.addView(card2)
 
+        // --- Local relationship memory ---
+        val relationshipMemory = RelationshipMemory(this)
+        root.addView(section("关系记忆"))
+        val memoryCard = card()
+        memoryCard.addView(text("默认关闭。启用后只保存精简事件摘要，不保存完整聊天原文；档案仅保存在本机。", 12f, sub).apply {
+            setPadding(0, dp(8), 0, dp(2))
+        })
+        val memoryRow = toggleRow("启用本地关系档案", relationshipMemory.enabled)
+        memoryCard.addView(memoryRow)
+        memoryCard.addView(secondaryBtn("查看与管理关系档案") {
+            startActivity(Intent(this, MemoryActivity::class.java))
+        })
+        root.addView(memoryCard)
+
         // --- 外观 ---
         root.addView(section("外观"))
         val card3 = card()
@@ -204,6 +219,7 @@ class SettingsActivity : AppCompatActivity() {
             prefs.analysisMode = analysisModeIds[analysisMode.selectedItemPosition]
             prefs.whitelist = wlEdit.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: true
+            relationshipMemory.enabled = (memoryRow.tag as? Boolean) ?: false
             prefs.overlayOpacity = seek.progress + 60
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
         })
