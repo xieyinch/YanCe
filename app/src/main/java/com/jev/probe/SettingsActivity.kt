@@ -109,6 +109,21 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(0, dp(8), 0, 0)
         }
         card1.addView(modelStatus)
+        val manualModelEdit = edit("", "模型名称，例如 gpt-4o-mini")
+        card1.addView(manualModelEdit)
+        card1.addView(secondaryBtn("手动添加模型") {
+            val model = manualModelEdit.text.toString().trim().removePrefix("models/")
+            if (model.isBlank()) {
+                modelStatus.text = "请输入模型名称"
+                return@secondaryBtn
+            }
+            addedModels.add(model)
+            prefs.availableModels = addedModels
+            modelAdapter.clear(); modelAdapter.addAll(addedModels.sorted()); modelAdapter.notifyDataSetChanged()
+            modelSpinner.setSelection(addedModels.sorted().indexOf(model))
+            manualModelEdit.text.clear()
+            modelStatus.text = "已添加模型：$model"
+        })
         card1.addView(secondaryBtn("拉取供应商模型") {
             val key = chatKeyEdit.text.toString().trim()
             val url = chatUrlEdit.text.toString().trim()
@@ -125,7 +140,17 @@ class SettingsActivity : AppCompatActivity() {
                         modelStatus.text = if (models.isEmpty()) "供应商未返回可用模型" else "已拉取 ${models.size} 个模型，可一键添加"
                     }
                 } catch (e: Exception) {
-                    main.post { modelStatus.text = "拉取失败：${e.message ?: "未知错误"}" }
+                    AppLog.e("模型拉取", e.message ?: "未知错误", e)
+                    main.post {
+                        val detail = e.message ?: "未知错误"
+                        modelStatus.text = when {
+                            detail.contains("Connection reset", true) -> "中转站断开了连接，已自动重试 3 次；可稍后重试或手动添加模型"
+                            detail.contains("timed out", true) -> "连接中转站超时；可稍后重试或手动添加模型"
+                            detail.startsWith("HTTP 401") || detail.startsWith("HTTP 403") -> "Key 无效或无权读取模型列表：$detail"
+                            detail.startsWith("HTTP 404") -> "中转站未开放模型列表接口；请手动添加模型"
+                            else -> "拉取失败：$detail；也可以手动添加模型"
+                        }
+                    }
                 }
             }
         })

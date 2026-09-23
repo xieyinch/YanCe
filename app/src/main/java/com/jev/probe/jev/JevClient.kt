@@ -436,35 +436,66 @@ class JevClient(
                 "claude" -> requestUrl.substringBefore("/v1/") + "/v1/models"
                 else -> requestUrl.substringBefore("/chat/completions").trimEnd('/') + "/models"
             }
-            val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"; connectTimeout = 15000; readTimeout = 25000
-                when (protocol) {
-                    "gemini" -> setRequestProperty("x-goog-api-key", key)
-                    "claude" -> {
-                        setRequestProperty("x-api-key", key)
-                        setRequestProperty("anthropic-version", "2023-06-01")
+            var lastError: Exception? = null
+            repeat(3) { attempt ->
+                var conn: HttpURLConnection? = null
+                try {
+                    conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 20000
+                        readTimeout = 30000
+                        useCaches = false
+                        instanceFollowRedirects = true
+                        setRequestProperty("Accept", "application/json")
+                        setRequestProperty("Accept-Encoding", "identity")
+                        setRequestProperty("Cache-Control", "no-cache")
+                        setRequestProperty("Connection", "close")
+                        setRequestProperty("User-Agent", "YanCe/1.2 (Android; model-discovery)")
+                        when (protocol) {
+                            "gemini" -> setRequestProperty("x-goog-api-key", key)
+                            "claude" -> {
+                                setRequestProperty("x-api-key", key)
+                                setRequestProperty("anthropic-version", "2023-06-01")
+                            }
+                            else -> setRequestProperty("Authorization", "Bearer $key")
+                        }
                     }
-                    else -> setRequestProperty("Authorization", "Bearer $key")
+                    val code = conn.responseCode
+                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                    val text = stream?.let {
+                        BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
+                    }.orEmpty()
+                    if (code !in 200..299) {
+                        val error = RuntimeException("HTTP $code: ${text.take(160)}")
+                        // Authentication and malformed-address errors cannot improve by retrying.
+                        if (code in 400..499 && code != 408 && code != 429) throw error
+                        lastError = error
+                    } else {
+                        val root = JSONObject(text)
+                        val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
+                        return (0 until arr.length()).mapNotNull { i ->
+                            val item = arr.optJSONObject(i) ?: return@mapNotNull null
+                            if (protocol == "gemini") {
+                                val methods = item.optJSONArray("supportedGenerationMethods")
+                                if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
+                                    return@mapNotNull null
+                            }
+                            val raw = item.optString(if (protocol == "gemini") "name" else "id")
+                            raw.removePrefix("models/").takeIf { it.isNotBlank() }
+                        }.distinct().sorted()
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    if (e.message?.startsWith("HTTP 4") == true &&
+                        e.message?.startsWith("HTTP 408") != true &&
+                        e.message?.startsWith("HTTP 429") != true) throw e
+                } finally {
+                    conn?.disconnect()
                 }
+                if (attempt < 2) Thread.sleep(700L * (attempt + 1))
             }
-            try {
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
-                val root = JSONObject(text)
-                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
-                return (0 until arr.length()).mapNotNull { i ->
-                    val item = arr.optJSONObject(i) ?: return@mapNotNull null
-                    if (protocol == "gemini") {
-                        val methods = item.optJSONArray("supportedGenerationMethods")
-                        if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
-                            return@mapNotNull null
-                    }
-                    val raw = item.optString(if (protocol == "gemini") "name" else "id")
-                    raw?.removePrefix("models/")?.takeIf { it.isNotBlank() }
-                }.distinct().sorted()
-            } finally { conn.disconnect() }
+            val detail = lastError?.message ?: lastError?.javaClass?.simpleName ?: "未知网络错误"
+            throw RuntimeException("连接连续重试 3 次仍失败：$detail")
         }
     }
 }
