@@ -17,6 +17,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.UnknownHostException
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -505,8 +507,10 @@ class JevClient(
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
-        private val IPV4_FIRST_DNS = Dns { hostname ->
-            Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
+        private val IPV4_FIRST_DNS = object : Dns {
+            @Throws(UnknownHostException::class)
+            override fun lookup(hostname: String): List<InetAddress> =
+                Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
         }
         private val HTTP1_IPV4 = HTTP.newBuilder()
             .dns(IPV4_FIRST_DNS)
