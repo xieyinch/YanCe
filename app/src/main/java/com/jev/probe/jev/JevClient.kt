@@ -15,9 +15,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.InetSocketAddress
+import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URI
 import java.net.URL
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -475,6 +478,14 @@ class JevClient(
                 }
             } catch (e: Exception) {
                 lastErr = e
+                if (e is java.io.IOException || e.message?.contains("Connection reset", true) == true) {
+                    try {
+                        AppLog.i("模型请求", "OkHttp 连接被重置，切换 Android 原生连接")
+                        return legacyPostJson(urlStr, body, key, protocol)
+                    } catch (legacy: Exception) {
+                        lastErr = legacy
+                    }
+                }
                 if (e.message?.contains("HTTP 4") == true) throw e // client error: no retry
                 attempt++
                 if (attempt < 3) Thread.sleep(500L * (1L shl attempt))
@@ -632,6 +643,15 @@ class JevClient(
                     }
                 } catch (e: Exception) {
                     lastError = e
+                    // The original #17 build used Android HttpURLConnection. Some
+                    // relays reset OkHttp connections but accept this legacy
+                    // Android transport (Connection: close + fixed-length GET).
+                    try {
+                        AppLog.i("模型拉取", "OkHttp 连接被重置，切换 Android 原生连接")
+                        return legacyFetchModels(protocol, key, listUrl, userAgent)
+                    } catch (legacy: Exception) {
+                        lastError = legacy
+                    }
                     if (e.message?.startsWith("HTTP 4") == true &&
                         e.message?.startsWith("HTTP 408") != true &&
                         e.message?.startsWith("HTTP 429") != true) throw e
@@ -640,6 +660,84 @@ class JevClient(
             }
             val detail = lastError?.message ?: lastError?.javaClass?.simpleName ?: "未知网络错误"
             throw RuntimeException("连接连续重试 5 次仍失败：$detail")
+        }
+
+        private fun legacyFetchModels(protocol: String, key: String, listUrl: String, userAgent: String): List<String> {
+            val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 20_000
+                readTimeout = 30_000
+                useCaches = false
+                instanceFollowRedirects = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Connection", "close")
+                setRequestProperty("User-Agent", userAgent.ifBlank { "YanCe/1.2 (Android; model-discovery)" })
+                when (protocol) {
+                    "gemini" -> setRequestProperty("x-goog-api-key", key)
+                    "claude" -> {
+                        setRequestProperty("x-api-key", key)
+                        setRequestProperty("anthropic-version", "2023-06-01")
+                    }
+                    else -> setRequestProperty("Authorization", "Bearer $key")
+                }
+            }
+            try {
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } }.orEmpty()
+                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
+                val root = JSONObject(text)
+                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
+                AppLog.i("模型拉取", "Android 原生连接成功，HTTP $code")
+                return (0 until arr.length()).mapNotNull { i ->
+                    val item = arr.optJSONObject(i) ?: return@mapNotNull null
+                    if (protocol == "gemini") {
+                        val methods = item.optJSONArray("supportedGenerationMethods")
+                        if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
+                            return@mapNotNull null
+                    }
+                    item.optString(if (protocol == "gemini") "name" else "id")
+                        .removePrefix("models/").takeIf { it.isNotBlank() }
+                }.distinct().sorted()
+            } finally { conn.disconnect() }
+        }
+
+        private fun legacyPostJson(urlStr: String, body: JSONObject, key: String, protocol: String): JSONObject {
+            val bytes = body.toString().toByteArray(Charsets.UTF_8)
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 20_000
+                readTimeout = 120_000
+                doInput = true
+                doOutput = true
+                useCaches = false
+                instanceFollowRedirects = true
+                setFixedLengthStreamingMode(bytes.size)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("Connection", "close")
+                setRequestProperty("User-Agent", "YanCe/1.2 (Android)")
+                when (protocol) {
+                    "gemini" -> setRequestProperty("x-goog-api-key", key)
+                    "claude" -> {
+                        setRequestProperty("x-api-key", key)
+                        setRequestProperty("anthropic-version", "2023-06-01")
+                    }
+                    else -> setRequestProperty("Authorization", "Bearer $key")
+                }
+            }
+            try {
+                conn.outputStream.use { it.write(bytes) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } }.orEmpty()
+                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
+                AppLog.i("模型请求", "Android 原生连接成功，HTTP $code")
+                return JSONObject(text)
+            } finally { conn.disconnect() }
         }
     }
 }
