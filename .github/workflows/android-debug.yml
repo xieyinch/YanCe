@@ -45,3 +45,19 @@ jobs:
           gh release upload "$RELEASE_TAG" yance-debug.apk \
             --repo "${{ github.repository }}" \
             --clobber
+      - name: Remove older debug releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: debug-${{ github.run_number }}
+        run: |
+          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName --jq '.[].tagName' |
+            while IFS= read -r tag; do
+              case "$tag" in
+                debug-*)
+                  if [ "$tag" != "$RELEASE_TAG" ]; then
+                    gh release delete "$tag" --repo "${{ github.repository }}" --cleanup-tag --yes
+                  fi
+                  ;;
+              esac
+            done
