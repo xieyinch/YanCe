@@ -13,12 +13,16 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.HttpURLConnection
 import java.net.URL
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.Handshake
+import okhttp3.Response
 
 /**
  * Uses the official Jev endpoint for structured judgments and a user-configured
@@ -34,7 +38,7 @@ class JevClient(
     private val chatProtocol: String = "openai"
 ) {
 
-    private val http = buildHttp()
+    private val http = HTTP
 
     private data class Coaching(
         val emotion: String? = null,
@@ -439,59 +443,25 @@ class JevClient(
     private fun postJson(urlStr: String, body: JSONObject, key: String, protocol: String = "jev"): JSONObject {
         require(key.isNotBlank()) { "请填写对应接口的密钥" }
         require(URL(urlStr).let { it.protocol == "https" && !it.host.isNullOrBlank() && it.toURI().userInfo == null }) { "请求地址必须使用有效的 HTTPS URL" }
-        var attempt = 0
-        var lastErr: Exception? = null
-        while (attempt < 3) {
-            try {
-                // Prefer the Android transport used by the original build. A
-                // number of relays reset OkHttp before sending any HTTP status.
-                try {
-                    return legacyPostJson(urlStr, body, key, protocol)
-                } catch (legacy: Exception) {
-                    lastErr = legacy
-                    AppLog.i("模型请求", "Android 原生连接失败，切换 OkHttp 备用通道")
-                }
-                val bytes = body.toString().toByteArray(Charsets.UTF_8)
-                val request = Request.Builder().url(urlStr)
-                    .apply {
-                        when (protocol) {
-                            "gemini" -> header("x-goog-api-key", key)
-                            "claude" -> {
-                                header("x-api-key", key)
-                                header("anthropic-version", "2023-06-01")
-                            }
-                            else -> header("Authorization", "Bearer $key")
-                        }
+        val bytes = body.toString().toByteArray(Charsets.UTF_8)
+        val request = Request.Builder().url(urlStr)
+            .apply {
+                when (protocol) {
+                    "gemini" -> header("x-goog-api-key", key)
+                    "claude" -> {
+                        header("x-api-key", key)
+                        header("anthropic-version", "2023-06-01")
                     }
-                    .post(bytes.toRequestBody(JSON_MEDIA_TYPE, 0, bytes.size))
-                    .build()
-                http.newCall(request).execute().use { response ->
-                    val code = response.code
-                    val text = response.body?.string().orEmpty()
-                    if (code == 429 || code == 529) {
-                        attempt++
-                        Thread.sleep(500L * (1L shl attempt))
-                        return@use
-                    }
-                    if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
-                    return JSONObject(text)
+                    else -> header("Authorization", "Bearer $key")
                 }
-            } catch (e: Exception) {
-                lastErr = e
-                if (e is java.io.IOException || e.message?.contains("Connection reset", true) == true) {
-                    try {
-                        AppLog.i("模型请求", "OkHttp 连接被重置，切换 Android 原生连接")
-                        return legacyPostJson(urlStr, body, key, protocol)
-                    } catch (legacy: Exception) {
-                        lastErr = legacy
-                    }
-                }
-                if (e.message?.contains("HTTP 4") == true) throw e // client error: no retry
-                attempt++
-                if (attempt < 3) Thread.sleep(500L * (1L shl attempt))
             }
+            .post(bytes.toRequestBody(JSON_MEDIA_TYPE, 0, bytes.size))
+            .build()
+        http.newCall(request).execute().use { response ->
+            val content = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw RuntimeException("HTTP ${response.code}: ${content.take(160)}")
+            return JSONObject(content)
         }
-        throw lastErr ?: RuntimeException("request failed")
     }
 
     private fun readableError(e: Exception): String {
@@ -510,15 +480,17 @@ class JevClient(
         private const val decisionsUrl = "https://api.typesafe.ai/v1/systemone"
         private const val decisionModel = "jev-latest"
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+        private val HTTP: OkHttpClient by lazy { buildHttp() }
+
         private fun buildHttp(): OkHttpClient {
             val builder = OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.MINUTES)
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
                 .writeTimeout(120, TimeUnit.SECONDS)
-                .callTimeout(180, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .followRedirects(true)
                 .followSslRedirects(true)
+                .eventListenerFactory { PhaseLog() }
                 .addInterceptor { chain ->
                     val original = chain.request()
                     val request = original.newBuilder()
@@ -538,6 +510,26 @@ class JevClient(
             return builder.build()
         }
 
+        /** Log only the network stage and protocol; never log URL queries, keys or message bodies. */
+        private class PhaseLog : EventListener() {
+            private var phase = "准备连接"
+            override fun dnsStart(call: Call, domainName: String) { phase = "DNS 查询" }
+            override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) {
+                phase = "TCP 连接 (${proxy.type()})"
+            }
+            override fun secureConnectStart(call: Call) { phase = "TLS 握手" }
+            override fun secureConnectEnd(call: Call, handshake: Handshake?) { phase = "发送请求" }
+            override fun requestHeadersStart(call: Call) { phase = "发送请求头" }
+            override fun responseHeadersStart(call: Call) { phase = "等待响应头" }
+            override fun responseHeadersEnd(call: Call, response: Response) {
+                phase = "HTTP ${response.code}"
+                AppLog.i("模型网络", "${call.request().method} ${call.request().url.encodedPath}: ${response.protocol} HTTP ${response.code}")
+            }
+            override fun callFailed(call: Call, ioe: IOException) {
+                AppLog.e("模型网络", "${call.request().method} ${call.request().url.encodedPath} 在$phase 失败：${ioe.javaClass.simpleName}")
+            }
+        }
+
         /** Fetch model identifiers exposed by the configured provider. */
         fun fetchModels(
             protocol: String,
@@ -547,7 +539,7 @@ class JevClient(
             require(key.isNotBlank()) { "请先填写大语言模型 Key" }
             require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
             val normalized = requestUrl.trim().trimEnd('/')
-            val http = buildHttp()
+            val http = HTTP
             val listUrl = when (protocol) {
                 "gemini" -> when {
                     normalized.contains("/models/") -> normalized.substringBefore("/models/") + "/models"
@@ -569,103 +561,24 @@ class JevClient(
                     else -> normalized.removeSuffix("/models") + "/models"
                 }
             }
-            var lastError: Exception? = null
-            AppLog.i("模型拉取", "请求 ${URL(listUrl).host}${URL(listUrl).path}，Rikka 默认 HTTP/2 + 系统 DNS")
-            repeat(5) { attempt ->
-                try {
-                    // Match the original Android implementation first; this
-                    // avoids waiting for an OkHttp socket that the relay resets.
-                    try {
-                        return legacyFetchModels(protocol, key, listUrl)
-                    } catch (legacy: Exception) {
-                        lastError = legacy
-                        AppLog.i("模型拉取", "Android 原生连接失败，切换 OkHttp 备用通道")
-                    }
-                    val request = Request.Builder().url(listUrl)
-                        .apply {
-                            when (protocol) {
-                                "gemini" -> header("x-goog-api-key", key)
-                                "claude" -> {
-                                    header("x-api-key", key)
-                                    header("anthropic-version", "2023-06-01")
-                                }
-                                else -> header("Authorization", "Bearer $key")
-                            }
+            val request = Request.Builder().url(listUrl)
+                .apply {
+                    when (protocol) {
+                        "gemini" -> header("x-goog-api-key", key)
+                        "claude" -> {
+                            header("x-api-key", key)
+                            header("anthropic-version", "2023-06-01")
                         }
-                        .get().build()
-                    http.newCall(request).execute().use { response ->
-                        val code = response.code
-                        val text = response.body?.string().orEmpty()
-                        AppLog.i("模型拉取", "第 ${attempt + 1} 次返回 HTTP $code")
-                        if (!response.isSuccessful) {
-                            val error = RuntimeException("HTTP $code: ${text.take(160)}")
-                            if (code in 400..499 && code != 408 && code != 429) throw error
-                            lastError = error
-                        } else {
-                            val root = JSONObject(text)
-                            val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
-                            return (0 until arr.length()).mapNotNull { i ->
-                                val item = arr.optJSONObject(i) ?: return@mapNotNull null
-                                if (protocol == "gemini") {
-                                    val methods = item.optJSONArray("supportedGenerationMethods")
-                                    if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
-                                        return@mapNotNull null
-                                }
-                                val raw = item.optString(if (protocol == "gemini") "name" else "id")
-                                raw.removePrefix("models/").takeIf { it.isNotBlank() }
-                            }
-                            .distinct().sorted()
-                        }
+                        else -> header("Authorization", "Bearer $key")
                     }
-                } catch (e: Exception) {
-                    lastError = e
-                    // The original #17 build used Android HttpURLConnection. Some
-                    // relays reset OkHttp connections but accept this legacy
-                    // Android transport (Connection: close + fixed-length GET).
-                    try {
-                        AppLog.i("模型拉取", "OkHttp 连接被重置，切换 Android 原生连接")
-                        return legacyFetchModels(protocol, key, listUrl)
-                    } catch (legacy: Exception) {
-                        lastError = legacy
-                    }
-                    if (e.message?.startsWith("HTTP 4") == true &&
-                        e.message?.startsWith("HTTP 408") != true &&
-                        e.message?.startsWith("HTTP 429") != true) throw e
                 }
-                if (attempt < 4) Thread.sleep(1000L * (1L shl attempt))
-            }
-            val detail = lastError?.message ?: lastError?.javaClass?.simpleName ?: "未知网络错误"
-            throw RuntimeException("连接连续重试 5 次仍失败：$detail")
-        }
-
-        private fun legacyFetchModels(protocol: String, key: String, listUrl: String): List<String> {
-            val conn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 60_000
-                readTimeout = 180_000
-                useCaches = false
-                instanceFollowRedirects = true
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("Cache-Control", "no-cache")
-                setRequestProperty("Connection", "close")
-                when (protocol) {
-                    "gemini" -> setRequestProperty("x-goog-api-key", key)
-                    "claude" -> {
-                        setRequestProperty("x-api-key", key)
-                        setRequestProperty("anthropic-version", "2023-06-01")
-                    }
-                    else -> setRequestProperty("Authorization", "Bearer $key")
-                }
-            }
-            try {
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } }.orEmpty()
-                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
-                val root = JSONObject(text)
-                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data") ?: JSONArray()
-                AppLog.i("模型拉取", "Android 原生连接成功，HTTP $code")
+                .get().build()
+            http.newCall(request).execute().use { response ->
+                val content = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw RuntimeException("HTTP ${response.code}: ${content.take(160)}")
+                val root = JSONObject(content)
+                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data")
+                    ?: throw RuntimeException("供应商模型列表缺少 data/models 字段")
                 return (0 until arr.length()).mapNotNull { i ->
                     val item = arr.optJSONObject(i) ?: return@mapNotNull null
                     if (protocol == "gemini") {
@@ -676,42 +589,7 @@ class JevClient(
                     item.optString(if (protocol == "gemini") "name" else "id")
                         .removePrefix("models/").takeIf { it.isNotBlank() }
                 }.distinct().sorted()
-            } finally { conn.disconnect() }
-        }
-
-        private fun legacyPostJson(urlStr: String, body: JSONObject, key: String, protocol: String): JSONObject {
-            val bytes = body.toString().toByteArray(Charsets.UTF_8)
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 60_000
-                readTimeout = 120_000
-                doInput = true
-                doOutput = true
-                useCaches = false
-                instanceFollowRedirects = true
-                setFixedLengthStreamingMode(bytes.size)
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("Connection", "close")
-                when (protocol) {
-                    "gemini" -> setRequestProperty("x-goog-api-key", key)
-                    "claude" -> {
-                        setRequestProperty("x-api-key", key)
-                        setRequestProperty("anthropic-version", "2023-06-01")
-                    }
-                    else -> setRequestProperty("Authorization", "Bearer $key")
-                }
             }
-            try {
-                conn.outputStream.use { it.write(bytes) }
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } }.orEmpty()
-                if (code !in 200..299) throw RuntimeException("HTTP $code: ${text.take(160)}")
-                AppLog.i("模型请求", "Android 原生连接成功，HTTP $code")
-                return JSONObject(text)
-            } finally { conn.disconnect() }
         }
     }
 }

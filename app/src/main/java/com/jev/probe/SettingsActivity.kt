@@ -131,10 +131,11 @@ class SettingsActivity : AppCompatActivity() {
                 modelStatus.text = "请先填写 API Key 和完整 HTTPS 请求地址"
                 return@secondaryBtn
             }
+            val selectedProtocol = protocolIds[protocol.selectedItemPosition]
             modelStatus.text = "正在拉取模型…"
             worker.execute {
                 try {
-                    val models = JevClient.fetchModels(protocolIds[protocol.selectedItemPosition], key, url)
+                    val models = JevClient.fetchModels(selectedProtocol, key, url)
                     main.post {
                         fetchedModels = models
                         modelStatus.text = if (models.isEmpty()) "供应商未返回可用模型" else "已拉取 ${models.size} 个模型，可一键添加"
@@ -144,7 +145,7 @@ class SettingsActivity : AppCompatActivity() {
                     main.post {
                         val detail = e.message ?: "未知错误"
                         modelStatus.text = when {
-                            detail.contains("Connection reset", true) -> "中转站断开了连接，已自动重试 3 次；可稍后重试或手动添加模型"
+                            detail.contains("Connection reset", true) -> "连接被重置；请在运行日志查看 DNS/TCP/TLS/响应阶段"
                             detail.contains("timed out", true) -> "连接中转站超时；可稍后重试或手动添加模型"
                             detail.startsWith("HTTP 401") || detail.startsWith("HTTP 403") -> "Key 无效或无权读取模型列表：$detail"
                             detail.startsWith("HTTP 404") -> "中转站未开放模型列表接口；请手动添加模型"
@@ -261,6 +262,15 @@ class SettingsActivity : AppCompatActivity() {
             val chatKey = chatKeyEdit.text.toString().trim()
             val model = modelSpinner.selectedItem?.toString()?.takeUnless { it.startsWith("（") } ?: ""
             val chatUrl = chatUrlEdit.text.toString().trim()
+            val selectedProtocol = protocolIds[protocol.selectedItemPosition]
+            val testRelationship = buildString {
+                append(relEdit.text.toString())
+                val mine = myMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
+                val other = otherMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
+                if (mine.isNotBlank()) append("；用户自述MBTI=").append(mine)
+                if (other.isNotBlank()) append("；对方自述/已知MBTI=").append(other)
+                if (mine.isNotBlank() || other.isNotBlank()) append("。MBTI只作沟通风格弱参考，聊天原文优先。")
+            }
             if (chatKey.isBlank() || model.isBlank()) { result.text = "请填写大语言模型 Key 并选择模型"; return@secondaryBtn }
             if (!validEndpoint(chatUrl)) {
                 result.text = "请求地址须为完整 HTTPS URL"; return@secondaryBtn
@@ -269,16 +279,8 @@ class SettingsActivity : AppCompatActivity() {
             worker.execute {
                 val demo = ChatSnapshot("连通测试", listOf(
                     Msg("other", "在吗？"), Msg("me", "在"), Msg("other", "那你说说昨天答应我的事")))
-                val testRelationship = buildString {
-                    append(relEdit.text.toString())
-                    val mine = myMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
-                    val other = otherMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
-                    if (mine.isNotBlank()) append("；用户自述MBTI=").append(mine)
-                    if (other.isNotBlank()) append("；对方自述/已知MBTI=").append(other)
-                    if (mine.isNotBlank() || other.isNotBlank()) append("。MBTI只作沟通风格弱参考，聊天原文优先。")
-                }
                 val a = JevClient(key, model, chatKey, chatUrl,
-                    protocolIds[protocol.selectedItemPosition]).analyzeStrict(demo, testRelationship)
+                    selectedProtocol).analyzeStrict(demo, testRelationship)
                 main.post {
                     if (a.error != null) AppLog.e("连通测试", a.error)
                     else AppLog.i("连通测试", if (key.isBlank()) "大模型独立分析成功" else "Jev + 大模型分析成功")
