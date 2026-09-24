@@ -294,7 +294,7 @@ class OverlayController(private val ctx: Context) {
 
     fun showLoading() {
         ensureRoot(); bubble?.alpha = 1f
-        setContent(listOf(stateView("正在看最近的聊天", "整理原话、可能的理解和回复方式…", true)))
+        setContent(listOf(stateView("正在理解这段对话", "分析意图、风险与合适的回应…", true)))
         if (!expanded) toggle()
     }
 
@@ -368,7 +368,7 @@ class OverlayController(private val ctx: Context) {
             views.add(safetyBanner(a.safetyLevel, a.safetySignals, a.safetyAdvice))
         }
 
-        a.emotionSupport?.takeUnless { it.isBlank() }?.let {
+        a.emotionSupport?.let {
             views.add(line(it, "#171A3A", 14f, true))
             views.add(divider())
         }
@@ -381,45 +381,42 @@ class OverlayController(private val ctx: Context) {
         }
         // Intent headline.
         a.trueIntent?.let {
-            val intent = INTENT[it.choice]
-            views.add(line(if (intent == null || it.choice == "unclear")
-                "这句话暂时还不好判断" else "这句话更像是：$intent", "#171A3A", 15f, true))
-            views.add(hint(if (intent == null || it.choice == "unclear")
-                "先按原话回应，别急着猜对方的心思" else "这是根据当前聊天的理解，不代表对方一定这么想"))
+            views.add(line("这句话可能在说：${INTENT[it.choice] ?: "还需要更多上下文"}", "#171A3A", 15f, true))
+            views.add(hint("基于当前聊天的暂定理解，也可能有其他解释"))
         }
         // Compact secondary line: needs · action · reply-now.
         val bits = ArrayList<String>()
-        a.sheNeeds?.let { NEEDS[it.choice]?.let { need -> bits.add(need) } }
-        a.bestAction?.let { ACTION[it.choice]?.let { action -> bits.add(action) } }
-        a.shouldReplyNow?.let { bits.add(if (it >= 0.5) "有依据就说具体点" else "先别猜细节") }
+        a.sheNeeds?.let { bits.add("要${(NEEDS[it.choice] ?: it.choice)}") }
+        a.bestAction?.let { bits.add(ACTION[it.choice] ?: it.choice) }
+        a.shouldReplyNow?.let { bits.add(if (it >= 0.5) "可给实质" else "先别给实质") }
         if (bits.isNotEmpty()) views.add(line(bits.joinToString("  ·  "), "#374151", 13f))
 
-        a.roundGoal?.let { views.add(tagLine("这次先", it)) }
-        a.reciprocityState?.let { RECIPROCITY[it]?.let { label -> views.add(detailBlock("互动情况", label)) } }
-        a.conflictType?.takeUnless { it == "none" }?.let { CONFLICT[it]?.let { label -> views.add(detailBlock("眼下的问题", label)) } }
-        if (a.facts.isNotEmpty()) views.add(detailBlock("聊天里能看到", a.facts.joinToString("；")))
-        a.inference?.let { views.add(detailBlock("还有一种可能", it)) }
-        a.unknown?.let { views.add(detailBlock("目前不确定", it)) }
+        a.roundGoal?.let { views.add(tagLine("本轮目标", it)) }
+        a.reciprocityState?.let { views.add(detailBlock("互惠状态", RECIPROCITY[it] ?: it)) }
+        a.conflictType?.takeUnless { it == "none" }?.let { views.add(detailBlock("冲突类型", CONFLICT[it] ?: it)) }
+        if (a.facts.isNotEmpty()) views.add(detailBlock("能确认", a.facts.joinToString("；")))
+        a.inference?.let { views.add(detailBlock("暂时推测", it)) }
+        a.unknown?.let { views.add(detailBlock("仍不知道", it)) }
 
         views.add(divider())
-        views.add(line("可以这样回", "#9CA3AF", 12f))
+        views.add(line("候选回复（智能排序）", "#9CA3AF", 12f))
         if (generating) {
-            views.add(hint("正在组织几种回复…"))
+            views.add(hint("生成中…"))
         } else {
             val fill = lastFill ?: {}
             a.rankedReplies.forEachIndexed { i, r ->
                 views.add(replyCard(i + 1, r.text, fill))
             }
-            if (a.rankedReplies.isEmpty()) views.add(hint("暂时没有合适的回复，可稍后再试"))
+            if (a.rankedReplies.isEmpty()) views.add(hint("（未生成候选回复）"))
         }
-        a.nextStep?.let { views.add(detailBlock("接下来可以", it)) }
-        a.stopCondition?.let { views.add(detailBlock("如果不顺利", it)) }
+        a.nextStep?.let { views.add(detailBlock("下一步", it)) }
+        a.stopCondition?.let { views.add(detailBlock("停止条件", it)) }
         if (!generating && listOf(a.positiveBranch, a.ambiguousBranch, a.negativeBranch).any { it != null }) {
             views.add(divider())
-            views.add(line("看对方的回应再决定", "#747B98", 12f, true))
-            a.positiveBranch?.let { views.add(branchLine("愿意聊", it, "#159A83")) }
-            a.ambiguousBranch?.let { views.add(branchLine("还没表态", it, "#D97706")) }
-            a.negativeBranch?.let { views.add(branchLine("明确拒绝", it, "#D45665")) }
+            views.add(line("对方接下来如果…", "#747B98", 12f, true))
+            a.positiveBranch?.let { views.add(branchLine("积极", it, "#159A83")) }
+            a.ambiguousBranch?.let { views.add(branchLine("含糊", it, "#D97706")) }
+            a.negativeBranch?.let { views.add(branchLine("拒绝", it, "#D45665")) }
         }
         views.add(reAnalyzeBtn())
 
@@ -434,7 +431,7 @@ class OverlayController(private val ctx: Context) {
             setPadding(0, 0, 0, dp(6))
         }
         row.addView(TextView(ctx).apply {
-            text = "对话氛围"
+            text = "对话压力 $lvl/$max"
             setTextColor(Color.WHITE); textSize = 13f; setTypeface(typeface, Typeface.BOLD)
             setPadding(dp(10), dp(4), dp(10), dp(4))
             background = card(20, color)
@@ -458,7 +455,7 @@ class OverlayController(private val ctx: Context) {
             ).apply { topMargin = dp(6) }
         }
         c.addView(TextView(ctx).apply {
-            this.text = if (top) "先看这句" else "另一种说法 $rank"; setTextColor(YanCeUi.SUCCESS); textSize = 11f
+            this.text = "建议 $rank"; setTextColor(YanCeUi.SUCCESS); textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
         })
         c.addView(TextView(ctx).apply {
@@ -563,34 +560,31 @@ class OverlayController(private val ctx: Context) {
     }
 
     private fun dangerWord(lvl: Int): String = when {
-        lvl >= 8 -> "明显冲突，先别推进"
-        lvl >= 6 -> "有较多不满，先缓一缓"
-        lvl >= 3 -> "可能有些不舒服"
-        else -> "暂未看到明显冲突"
+        lvl >= 8 -> "冲突激烈"
+        lvl >= 6 -> "压力偏高"
+        lvl >= 3 -> "有些紧张"
+        else -> "平稳"
     }
 
     companion object {
         private val INTENT = mapOf(
-            "confirm_you_care" to "在问你有没有记得这件事", "vent_anger" to "在说自己不太舒服",
-            "request_action" to "等你回应一件具体的事", "seek_explanation" to "想知道事情怎么回事",
-            "casual_chat" to "分享近况，顺着话题聊聊", "close_topic" to "想让这个话题先停在这儿",
+            "confirm_you_care" to "想知道你有没有留意这件事", "vent_anger" to "可能在表达不满或委屈",
+            "request_action" to "希望你回应具体的事", "seek_explanation" to "想弄清楚发生了什么",
+            "casual_chat" to "在分享近况或接着聊天", "close_topic" to "可能想先结束这个话题",
             "unclear" to "暂时看不出明确意图")
         private val NEEDS = mapOf(
-            "apology" to "先承认造成的不舒服", "action" to "回应具体安排",
-            "explanation" to "说清已知的原因", "care" to "让对方知道你有在听",
-            "nothing" to "暂时不用追加解释", "unclear" to "先听听后续")
+            "apology" to "道歉", "action" to "具体行动", "explanation" to "解释",
+            "care" to "你的在乎", "nothing" to "（不用做什么）", "unclear" to "更多信息")
         private val ACTION = mapOf(
-            "check_history" to "先核对聊天记录", "apologize" to "说清自己错在哪",
-            "give_commitment" to "只答应能做到的", "explain" to "说明已知情况",
-            "acknowledge" to "先回应原话", "say_less" to "说短一点",
-            "make_plan" to "商量具体安排")
+            "check_history" to "翻聊天记录", "apologize" to "先道歉", "give_commitment" to "给承诺",
+            "explain" to "解释清楚", "acknowledge" to "接住情绪", "say_less" to "少说两句",
+            "make_plan" to "定个安排")
         private val RECIPROCITY = mapOf(
-            "mutual" to "目前双方都有回应", "insufficient" to "只凭这段聊天还看不出",
-            "imbalanced" to "这段时间的投入可能不对等", "rejected" to "对方已明确表达不愿意",
-            "danger" to "出现需要认真对待的安全信号")
+            "mutual" to "双方有来有回", "insufficient" to "证据还不够",
+            "imbalanced" to "持续投入失衡", "rejected" to "对方已明确拒绝", "danger" to "存在安全风险")
         private val CONFLICT = mapOf(
-            "misunderstanding" to "可能有话没说明白", "solvable" to "有件具体的事待处理",
-            "persistent_difference" to "同一问题反复出现", "core_incompatibility" to "重要期待可能不一致",
-            "power_safety" to "先关注边界与安全")
+            "misunderstanding" to "信息误解", "solvable" to "可解决问题",
+            "persistent_difference" to "持续差异", "core_incompatibility" to "核心不兼容",
+            "power_safety" to "权力或安全问题")
     }
 }
