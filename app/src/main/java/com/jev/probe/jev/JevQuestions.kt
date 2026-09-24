@@ -5,10 +5,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Fixed Jev question set, ported verbatim from tools/jev/questions.py (the
- * wording that passed calibration). Instructions/criteria in English; chat text
- * stays Chinese. The state `from` field uses "me"/"other" (the instructions
- * already refer to "the other person" throughout).
+ * Jev supplies relative judgments about this chat excerpt. Its probabilities
+ * are not calibrated forecasts of someone's feelings or future behavior.
  */
 object JevQuestions {
 
@@ -33,33 +31,33 @@ object JevQuestions {
     /** The 7 judgment questions. Returns a fresh JSONObject each call. */
     fun judge(): JSONObject = JSONObject().apply {
         put("literal_question", noul(
-            "Is the other person's latest message meant purely literally, with no subtext? " +
-                "Judge from the whole thread, not one sentence in isolation.",
+            "Is the latest message adequately explained by its literal meaning? " +
+                "Use the actual thread. A short reply, slow response, emoji, or mention of sleep alone is not evidence of a hidden test.",
             "The latest message is a straightforward statement, question, or plan " +
                 "with no implied accusation, test, sarcasm, hint, or unsaid request.",
-            "There is subtext: a test of whether you remember or care, sarcasm, " +
-                "an implied complaint, a hint they will not say outright, a trap question, " +
-                "an accusation dressed as a question, or a cold/short line that really means blame."
+            "The thread contains an explicit reference to an unresolved complaint, contradiction, " +
+                "sarcasm, or an unmet commitment supporting a specific implied meaning."
         ))
         put("true_intent", choice(
             "What is the other person's true intent in the latest message, given the full conversation? " +
-                "Prefer tone and context over surface wording. " +
-                "If they are checking whether you remember something or still care, choose confirm_you_care " +
-                "even if the words look like a request to 'say it' or to do something. " +
+            "Start from what was said, then compare at least two plausible interpretations. " +
+                "A brief message, delayed reply, sleep, or a single affectionate phrase does not establish attraction, rejection, or a loyalty test. " +
+                "Choose unclear when the excerpt cannot distinguish the alternatives. " +
                 "If they already accepted and closed the matter peacefully, choose close_topic. " +
-                "Ending the relationship, deleting you, or 'don't talk to me' is vent_anger, never close_topic.",
+                "Respect explicit requests for no contact; do not assume anger or an invitation to persuade.",
             linkedMapOf(
+                "unclear" to "Multiple everyday interpretations fit; there is too little evidence to assign a hidden motive.",
                 "confirm_you_care" to ("They are testing whether you remember, pay attention, or still care. " +
                     "Signals: 'did you forget again', 'then say it', 'you better', sarcastic 'busy person', " +
-                    "asking you to prove you know a past conversation. " +
+                    "asking you to prove you know a past conversation, supported by prior context. " +
                     "If they mainly want a new deliverable or a yes on a time, do not use this."),
-                "vent_anger" to ("They are angry or hurt and mainly want the feeling acknowledged. " +
+                "vent_anger" to ("They explicitly express anger or hurt and mainly want the feeling acknowledged. " +
                     "They are blaming or raising the temperature; a specific plan is not the main point yet."),
                 "request_action" to ("They want a concrete action, time, deliverable, or commitment from you now, " +
                     "and this is a real ask, not a loyalty test."),
                 "seek_explanation" to ("They want a factual explanation of why something happened. " +
                     "They asked why or what is going on, not mainly for an apology or a new plan."),
-                "casual_chat" to ("Light talk, banter, sharing, teasing with a laugh, or friendly logistics " +
+                "casual_chat" to ("Light talk, factual updates (including sleep and scheduling), banter, or friendly logistics " +
                     "with no emotional test and no conflict. A friend suggesting a meal time can be this " +
                     "if the thread is warm."),
                 "close_topic" to ("Peaceful wrap-up only: they accepted an apology, confirmed a happy plan, said thanks, " +
@@ -68,14 +66,14 @@ object JevQuestions {
             )
         ))
         put("danger_level", score(
-            "How close is this conversation to a fight or to hurting the relationship? " +
+            "Rate observable conversational friction, NOT physical danger, attraction, or a prediction of relationship outcome. " +
                 "Match the current scene. " +
                 "If they genuinely accepted an apology or confirmed a happy plan, score the cooled-down present, " +
                 "not an earlier complaint. " +
                 "If an ultimatum (break up, report to the boss, stop covering for you) is still in force " +
                 "and has not been withdrawn, stay in that high bin even if the latest line names a specific task.",
             listOf(
-                "Light chat or joking; no complaint, no test, no deadline.",
+                "Neutral updates or light chat; no evidence of a complaint, test, or deadline.",
                 "Mild tease or a small reminder that is easy to laugh off; a clumsy reply would only feel slightly awkward.",
                 "A mild complaint or 'please remember next time' said without heat; they still send warm or practical follow-ups.",
                 "Noticeable unhappiness; they mention being forgotten, ignored, or kept waiting, but still give you a chance to make it right.",
@@ -126,7 +124,8 @@ object JevQuestions {
             )
         ))
         put("she_needs", choice(
-            "What does the other person need from you right now? Judge the LATEST message first. " +
+            "What does the other person explicitly need in this excerpt? Judge the LATEST message first. " +
+                "Choose unclear if a need cannot be inferred without guessing; ordinary updates need no special emotional repair. " +
                 "If they genuinely accepted (thanks / got it / 没事了 / 那就这样 / 收到了 / 过去了), " +
                 "you MUST choose nothing, even if earlier they wanted action or an apology. " +
                 "Sarcastic 'I'm used to it', 'whatever', 'I don't want to hear it', 'don't bother coming' " +
@@ -134,6 +133,7 @@ object JevQuestions {
                 "If they asked you to recap a named time/place/date, choose action. " +
                 "If they are testing whether you remember or still care, and the content is unnamed, choose care.",
             linkedMapOf(
+                "unclear" to "No reliable evidence identifies a specific need; avoid claiming to know their feelings.",
                 "apology" to "They need a sincere apology for hurt or a mistake, and they have not accepted one yet.",
                 "action" to ("They need a concrete action, time, commitment, recap of a named fact, or follow-through, " +
                     "and they have not yet accepted one."),
@@ -146,14 +146,13 @@ object JevQuestions {
             )
         ))
         put("tension_resolved", noul(
-            "Has interpersonal tension already been resolved? " +
-                "Answer true only if there was never tension, or the other person has clearly accepted, " +
+            "Has PREVIOUSLY observable interpersonal tension been resolved in the excerpt? " +
+                "Do not mark a never-tense chat as resolved. " +
+                "Answer true only if the other person has clearly accepted, " +
                 "cooled down, joked again, or said it is fine. " +
                 "A sarcastic 'you better', an unanswered test, leftover blame, or an open ultimatum means false.",
-            "No remaining tension: they accepted, joked again, said it's fine, " +
-                "confirmed a happy plan, or the chat was never tense.",
-            "Tension is still present: they are waiting, testing, angry, sarcastic, " +
-                "issuing an ultimatum, or the issue is open."
+            "There was a visible dispute and the other person accepted, joked again, said it's fine, or confirmed repair.",
+            "Tension is present or unresolved, OR no earlier tension was visible so resolution cannot be claimed."
         ))
     }
 
@@ -181,8 +180,10 @@ object JevQuestions {
             put("type", "choice")
             put("instructions",
                 "Which candidate reply is the most appropriate next message, " +
-                    "given the conversation and the other person's true need? " +
+                    "given only the observable conversation and plausible needs? " +
                     "Prefer a reply that matches the best action type. " +
+                    "Favor natural, reciprocal, short replies to everyday updates; don't push romance, make promises, " +
+                    "or manufacture urgency. Preserve the user's dignity and the other person's boundaries. " +
                     "Penalize dismissive, over-promising, or off-topic replies. " +
                     "If the facts are not yet confirmed, prefer the candidate that looks them up " +
                     "instead of faking memory or a vague apology.")
