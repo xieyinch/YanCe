@@ -373,7 +373,7 @@ class OverlayController(private val ctx: Context) {
             views.add(divider())
         }
 
-        // Danger badge — the alarm signal, up top and color-coded.
+        // This Jev score describes conversational friction, never physical safety.
         a.dangerLevel?.let {
             val lvl = it.score.roundToInt()
             views.add(dangerBadge(lvl, it.maxLevel))
@@ -381,8 +381,8 @@ class OverlayController(private val ctx: Context) {
         }
         // Intent headline.
         a.trueIntent?.let {
-            views.add(line("对方可能想表达：${INTENT[it.choice] ?: it.choice}", "#171A3A", 15f, true))
-            views.add(hint("把握 ${(it.confidence * 100).roundToInt()}%"))
+            views.add(line("这句话可能在说：${INTENT[it.choice] ?: "还需要更多上下文"}", "#171A3A", 15f, true))
+            views.add(hint("基于当前聊天的暂定理解，也可能有其他解释"))
         }
         // Compact secondary line: needs · action · reply-now.
         val bits = ArrayList<String>()
@@ -390,7 +390,6 @@ class OverlayController(private val ctx: Context) {
         a.bestAction?.let { bits.add(ACTION[it.choice] ?: it.choice) }
         a.shouldReplyNow?.let { bits.add(if (it >= 0.5) "可给实质" else "先别给实质") }
         if (bits.isNotEmpty()) views.add(line(bits.joinToString("  ·  "), "#374151", 13f))
-        a.tensionResolved?.let { if (it >= 0.7) views.add(line("✓ 紧张已缓解", "#16A34A", 12f)) }
 
         a.roundGoal?.let { views.add(tagLine("本轮目标", it)) }
         a.reciprocityState?.let { views.add(detailBlock("互惠状态", RECIPROCITY[it] ?: it)) }
@@ -406,7 +405,7 @@ class OverlayController(private val ctx: Context) {
         } else {
             val fill = lastFill ?: {}
             a.rankedReplies.forEachIndexed { i, r ->
-                views.add(replyCard(i + 1, r.text, (r.prob * 100).roundToInt(), fill))
+                views.add(replyCard(i + 1, r.text, fill))
             }
             if (a.rankedReplies.isEmpty()) views.add(hint("（未生成候选回复）"))
         }
@@ -432,7 +431,7 @@ class OverlayController(private val ctx: Context) {
             setPadding(0, 0, 0, dp(6))
         }
         row.addView(TextView(ctx).apply {
-            text = "危险 $lvl/$max"
+            text = "对话压力 $lvl/$max"
             setTextColor(Color.WHITE); textSize = 13f; setTypeface(typeface, Typeface.BOLD)
             setPadding(dp(10), dp(4), dp(10), dp(4))
             background = card(20, color)
@@ -444,7 +443,7 @@ class OverlayController(private val ctx: Context) {
         return row
     }
 
-    private fun replyCard(rank: Int, text: String, pct: Int, onFill: (String) -> Unit): View {
+    private fun replyCard(rank: Int, text: String, onFill: (String) -> Unit): View {
         val top = rank == 1
         val cardBg = if (top) YanCeUi.MINT_SOFT else Color.parseColor("#F7F8FA")
         val c = LinearLayout(ctx).apply {
@@ -456,7 +455,7 @@ class OverlayController(private val ctx: Context) {
             ).apply { topMargin = dp(6) }
         }
         c.addView(TextView(ctx).apply {
-            this.text = "建议 $rank · ${pct}%"; setTextColor(YanCeUi.SUCCESS); textSize = 11f
+            this.text = "建议 $rank"; setTextColor(YanCeUi.SUCCESS); textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
         })
         c.addView(TextView(ctx).apply {
@@ -561,20 +560,21 @@ class OverlayController(private val ctx: Context) {
     }
 
     private fun dangerWord(lvl: Int): String = when {
-        lvl >= 8 -> "很危险"
-        lvl >= 6 -> "偏危险"
-        lvl >= 3 -> "留神"
-        else -> "安全"
+        lvl >= 8 -> "冲突激烈"
+        lvl >= 6 -> "压力偏高"
+        lvl >= 3 -> "有些紧张"
+        else -> "平稳"
     }
 
     companion object {
         private val INTENT = mapOf(
-            "confirm_you_care" to "确认你在不在乎", "vent_anger" to "在发泄情绪",
-            "request_action" to "要你办事", "seek_explanation" to "要个解释",
-            "casual_chat" to "随便聊聊", "close_topic" to "事情过去了")
+            "confirm_you_care" to "想知道你有没有留意这件事", "vent_anger" to "可能在表达不满或委屈",
+            "request_action" to "希望你回应具体的事", "seek_explanation" to "想弄清楚发生了什么",
+            "casual_chat" to "在分享近况或接着聊天", "close_topic" to "可能想先结束这个话题",
+            "unclear" to "暂时看不出明确意图")
         private val NEEDS = mapOf(
             "apology" to "道歉", "action" to "具体行动", "explanation" to "解释",
-            "care" to "你的在乎", "nothing" to "（不用做什么）")
+            "care" to "你的在乎", "nothing" to "（不用做什么）", "unclear" to "更多信息")
         private val ACTION = mapOf(
             "check_history" to "翻聊天记录", "apologize" to "先道歉", "give_commitment" to "给承诺",
             "explain" to "解释清楚", "acknowledge" to "接住情绪", "say_less" to "少说两句",
