@@ -145,13 +145,14 @@ class JevClient(
                 (if (it.side == "me") "我" else "对方") + "：" + it.text
             }
             val system = "你是谨慎、清醒的中文关系沟通助手。先识别情绪和真实需求，严格区分事实、合理推测和未知；" +
-                "优先考虑互惠、可靠性、边界与长期信任；不得编造事实，不得设计施压、纠缠或操控话术。" +
+                "优先考虑互惠、可靠性、边界与长期信任；简短回复、慢回或提到睡觉不能当作喜欢、拒绝或试探的证据；" +
+                "证据不足时保持多种解释，只建议低压力的下一步；不得编造事实，不得设计施压、纠缠或操控话术。" +
                 "如果关系信息中提供MBTI，只将其作为表达风格和沟通偏好的弱参考，不能据此推断事实、情绪或真实意图；" +
                 "完成结构化判断并生成回复，只输出一个JSON对象，不要Markdown。"
             val user = "关系：" + relationship + "\n\n最近对话：\n" + convo +
                 "\n\n返回字段：true_intent只能是confirm_you_care、vent_anger、request_action、" +
-                "seek_explanation、casual_chat、close_topic之一；danger_level为0到9数字；" +
-                "need只能是apology、action、explanation、care、nothing之一；" +
+                "seek_explanation、casual_chat、close_topic、unclear之一；danger_level为0到9对话摩擦评分，不代表人身危险；" +
+                "need只能是apology、action、explanation、care、nothing、unclear之一；" +
                 "best_action只能是check_history、apologize、give_commitment、explain、acknowledge、" +
                 "say_less、make_plan之一；should_reply_now、tension_resolved、literal_question为布尔值；" +
                 "emotion为对用户的1句情绪承接；facts为最多3条原文可确认事实；inference为1条暂定解释；" +
@@ -165,7 +166,7 @@ class JevClient(
                 "branches包含positive、ambiguous、negative三种后续动作；replies为恰好3条可直接发送、策略不同的中文回复。格式：" +
                 "{\"true_intent\":\"casual_chat\",\"danger_level\":0,\"need\":\"nothing\"," +
                 "\"best_action\":\"acknowledge\",\"should_reply_now\":true," +
-                "\"tension_resolved\":true,\"literal_question\":true,\"emotion\":\"...\",\"facts\":[\"...\"]," +
+                "\"tension_resolved\":false,\"literal_question\":true,\"emotion\":\"...\",\"facts\":[\"...\"]," +
                 "\"inference\":\"...\",\"unknown\":\"...\",\"goal\":\"承接\",\"next_step\":\"...\"," +
                 "\"stop_condition\":\"...\",\"safety_level\":\"normal\",\"safety_signals\":[],\"safety_advice\":\"...\"," +
                 "\"reciprocity\":\"insufficient\",\"conflict_type\":\"none\"," +
@@ -176,15 +177,15 @@ class JevClient(
             latestCoaching = parseCoaching(root)
             AppLog.i("分析", "未配置Jev，已使用大语言模型独立分析")
             Analysis(
-                trueIntent = fallbackChoice(root.optString("true_intent", "casual_chat")),
-                dangerLevel = Score(root.optDouble("danger_level", 0.0).coerceIn(0.0, 9.0), 0.65, 9),
-                sheNeeds = fallbackChoice(root.optString("need", "nothing")),
+                trueIntent = fallbackChoice(root.optString("true_intent", "unclear")),
+                dangerLevel = Score(root.optDouble("danger_level", 0.0).coerceIn(0.0, 9.0), 0.0, 9),
+                sheNeeds = fallbackChoice(root.optString("need", "unclear")),
                 shouldReplyNow = if (root.optBoolean("should_reply_now", true)) 1.0 else 0.0,
                 bestAction = fallbackChoice(root.optString("best_action", "acknowledge")),
                 tensionResolved = if (root.optBoolean("tension_resolved", false)) 1.0 else 0.0,
                 literalQuestion = if (root.optBoolean("literal_question", false)) 1.0 else 0.0,
                 rankedReplies = replies.mapIndexed { i, text ->
-                    RankedReply(text, listOf(0.60, 0.30, 0.10).getOrElse(i) { 0.0 })
+                    RankedReply(text, 0.0)
                 },
                 latencyMs = System.currentTimeMillis() - start,
                 emotionSupport = latestCoaching.emotion,
@@ -210,7 +211,7 @@ class JevClient(
         }
     }
 
-    private fun fallbackChoice(value: String) = Choice(value, 0.65, mapOf(value to 0.65))
+    private fun fallbackChoice(value: String) = Choice(value, 0.0, emptyMap())
 
     private fun parseObject(content: String): JSONObject {
         val start = content.indexOf('{')
@@ -370,22 +371,25 @@ class JevClient(
      */
     private val relationshipCoachPrompt: String
         get() = "你是谨慎、清醒、站在用户一边的中文关系沟通助手。先接住用户情绪，再完成判断。" +
-            "判断时必须：1.先识别对方情绪和真正需求；2.严格区分聊天能确认的事实、合理推测和未知，" +
+            "判断时必须：1.先看对方实际说了什么，不预设喜欢、不满或试探；2.严格区分聊天能确认的事实、合理推测和未知，" +
             "禁止读心；3.优先考虑互惠、可靠性、边界、现实可行性和长期信任；" +
             "4.明确拒绝、不适或持续缺乏回应时，不设计施压、纠缠、贬低、试探或操控话术；" +
-            "5.信息不足时选择澄清或简短承接，不假装记得、不虚构理由；" +
+            "5.信息不足时列出至少两种平常的解释，不把用户期待的恋爱进展当作对方的意图；" +
+            "选择澄清或简短承接，不假装记得、不虚构理由；" +
             "6.避免替用户做重大决定或过度承诺；7.若提供MBTI，只用于微调回复的直接程度、信息密度、" +
             "情绪承接和行动表达，不得把类型当事实、诊断或刻板标签，聊天原文始终优先。" +
             "先做安全筛查：只有聊天原文明示暴力、限制自由、跟踪、性强迫、隐私威胁、经济控制、" +
             "自伤或伤人要挟时，safety_level才为caution或danger，并在safety_signals引用简短证据。" +
             "danger时回复只能用于停止升级、确认安全或寻求支持，不得推进关系、挽回、挑衅或建议单独摊牌。" +
-            "再提取：emotion一句情绪承接；facts最多3条原文事实；inference一条暂定推测；unknown一条关键未知；" +
+            "再提取：emotion一句不过度揣测的承接；facts最多3条原文事实；" +
+            "inference一条包含可替代解释的暂定推测；unknown一条会影响策略的关键未知；" +
             "goal只选承接、降压、调侃、轻推、约见、澄清、收线之一；next_step一个小动作；stop_condition停止条件；" +
             "reciprocity只选mutual、insufficient、imbalanced、rejected、danger，证据不足不得判失衡；" +
             "conflict_type只选none、misunderstanding、solvable、persistent_difference、core_incompatibility、power_safety；" +
             "branches给出positive、ambiguous、negative三种回应下各一个后续动作。" +
             "再生成含且仅含3条可以直接发送的中文回复：" +
-            "第一条稳妥共情并承接核心需求；第二条在事实充分时给具体行动，否则礼貌澄清；" +
+            "日常对话优先自然接话，不把聊天导向表白或关系确认。" +
+            "第一条稳妥承接原话；第二条在事实充分时给具体行动，否则礼貌澄清；" +
             "第三条简短自然并保留双方空间。三条策略必须不同，每条不超过50字，像真人聊天。" +
             "只输出JSON对象，字段为emotion、facts、inference、unknown、goal、next_step、stop_condition、" +
             "safety_level、safety_signals、safety_advice、reciprocity、conflict_type、branches、replies。" +
