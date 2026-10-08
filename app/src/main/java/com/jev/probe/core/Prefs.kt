@@ -26,7 +26,7 @@ class Prefs(context: Context) {
         }
         set(v) = sp.edit().putString("jev_key", v.trim()).apply()
 
-    /** Custom text-generation provider: openai, gemini, or claude. */
+    /** Custom text-generation provider: openai, deepseek, gemini, or claude. */
     var llmProtocol: String
         get() = sp.getString("llm_protocol", "openai") ?: "openai"
         set(v) = sp.edit().putString("llm_protocol", v).apply()
@@ -108,6 +108,33 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_AUTO, true)
         set(v) = sp.edit().putBoolean(K_AUTO, v).apply()
 
+    /**
+     * Packages the user enabled for capture. `null` means the setting was never saved, in which
+     * case every supported app counts as enabled — so upgrading does not silently change what
+     * gets read.
+     */
+    fun enabledAppsOrNull(): Set<String>? = sp.getStringSet(K_ENABLED_APPS, null)
+
+    fun setEnabledApps(packages: Set<String>) =
+        sp.edit().putStringSet(K_ENABLED_APPS, packages).apply()
+
+    /**
+     * Expand the overlay panel as soon as a result is ready. Off by default: the panel then stays
+     * a small bubble that lights up, so it never covers the chat until it is tapped.
+     */
+    var autoExpandOverlay: Boolean
+        get() = sp.getBoolean(K_AUTO_EXPAND, false)
+        set(v) = sp.edit().putBoolean(K_AUTO_EXPAND, v).apply()
+
+    /**
+     * Show a small always-available ball that dumps the node tree of the app underneath it.
+     * Needed because the Log page's own button can only ever capture 言策 itself — tapping it
+     * makes our activity the active window.
+     */
+    var diagnosticBubble: Boolean
+        get() = sp.getBoolean(K_DIAG_BUBBLE, false)
+        set(v) = sp.edit().putBoolean(K_DIAG_BUBBLE, v).apply()
+
     fun isAllowed(title: String?): Boolean {
         val wl = whitelist
         if (wl.isEmpty()) return true
@@ -132,9 +159,18 @@ class Prefs(context: Context) {
         private const val K_BUBBLE_Y = "bubble_y"
         private const val K_BUBBLE_X = "bubble_x"
         private const val K_AUTO = "auto_analyze"
+        private const val K_ENABLED_APPS = "enabled_apps"
+        private const val K_AUTO_EXPAND = "auto_expand_overlay"
+        private const val K_DIAG_BUBBLE = "diagnostic_bubble"
 
         const val DEFAULT_REPLY_MODEL = ""
-        const val DEFAULT_REL = "对方是我的伴侣；from=me 的是我发的，from=other 的是对方发的"
+        const val DEFAULT_REL = "对方是我的伴侣；from=me 是我发的，from=other 是对方发的"
+
+        /** DeepSeek speaks the OpenAI wire format; its endpoints sit directly under the base URL. */
+        const val DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+        /** Seed list so the settings page can be saved before the first model-list round-trip. */
+        val DEEPSEEK_MODELS = listOf("deepseek-flash", "deepseek-v4-pro")
         val MBTI_TYPES = setOf(
             "INTJ", "INTP", "ENTJ", "ENTP", "INFJ", "INFP", "ENFJ", "ENFP",
             "ISTJ", "ISFJ", "ESTJ", "ESFJ", "ISTP", "ISFP", "ESTP", "ESFP"

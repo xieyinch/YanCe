@@ -269,8 +269,17 @@ class JevClient(
                 extractText(resp)
             }
             else -> {
-                val url = generationUrl("openai", chatUrl, replyModel)
-                val body = if (url.endsWith("/responses")) {
+                // OpenAI-compatible transports. Plain OpenAI gateways live under /v1, while
+                // DeepSeek's documented endpoints hang directly off the base URL. We try the
+                // preferred form first and retry the other one on HTTP 404, so a bare host,
+                // a /v1 URL and a complete endpoint all work.
+                val endpoints = openAiEndpoints(
+                    chatUrl,
+                    "/chat/completions",
+                    preferBarePath = chatProtocol == DEEPSEEK_PROTOCOL,
+                    honoured = listOf("/chat/completions", "/responses")
+                )
+                val body = if (endpoints.first().substringBefore('?').endsWith("/responses")) {
                     JSONObject().put("model", replyModel).put("instructions", system).put("input", user)
                 } else {
                     val messages = JSONArray()
@@ -279,8 +288,7 @@ class JevClient(
                     JSONObject().put("model", replyModel).put("messages", messages)
                         .put("temperature", 0.8).put("stream", false)
                 }
-                val resp = postJson(url, body, chatKey, "openai")
-                extractText(resp)
+                extractText(postJsonFallback(endpoints, body, chatKey, "openai"))
             }
         }
     }
@@ -302,13 +310,8 @@ class JevClient(
                 URL(url).path.isNullOrBlank() || URL(url).path == "/" -> "$url/v1/messages"
                 else -> url
             }
-            else -> when {
-                url.endsWith("/chat/completions") || url.endsWith("/responses") -> url
-                url.endsWith("/v1") -> "$url/chat/completions"
-                url.endsWith("/models") -> url.removeSuffix("/models") + "/chat/completions"
-                URL(url).path.isNullOrBlank() || URL(url).path == "/" -> "$url/v1/chat/completions"
-                else -> url
-            }
+            else -> openAiEndpoints(url, "/chat/completions", preferBarePath = false,
+                honoured = listOf("/chat/completions", "/responses")).first()
         }
     }
 
@@ -341,6 +344,11 @@ class JevClient(
                 if (text.isNotBlank()) return text
             }
         }
+        // Reasoning models (DeepSeek thinking modes and similar) can return an empty
+        // `content` and put the payload in `reasoning_content` instead. Recover it as a
+        // last resort so the JSON object can still be parsed out downstream.
+        choice?.optJSONObject("message")?.optString("reasoning_content")
+            ?.takeIf { it.isNotBlank() }?.let { return it }
         throw RuntimeException("供应商返回成功，但未找到文本内容")
     }
 
@@ -468,6 +476,29 @@ class JevClient(
         }
     }
 
+    /**
+     * POST to the first candidate endpoint that does not answer HTTP 404.
+     * Used to absorb the /v1 and non-/v1 path split between OpenAI-style gateways
+     * and DeepSeek, without making the user guess which form their provider wants.
+     */
+    private fun postJsonFallback(
+        urls: List<String>,
+        body: JSONObject,
+        key: String,
+        protocol: String
+    ): JSONObject {
+        var lastError: RuntimeException? = null
+        for (url in urls) {
+            try {
+                return postJson(url, body, key, protocol)
+            } catch (e: RuntimeException) {
+                lastError = e
+                if (!e.message.orEmpty().contains("HTTP 404")) throw e
+            }
+        }
+        throw lastError ?: RuntimeException("没有可用的请求地址")
+    }
+
     private fun readableError(e: Exception): String {
         val m = e.message ?: e.javaClass.simpleName
         return when {
@@ -544,56 +575,100 @@ class JevClient(
             require(requestUrl.startsWith("https://")) { "请求地址必须使用 HTTPS" }
             val normalized = requestUrl.trim().trimEnd('/')
             val http = HTTP
-            val listUrl = when (protocol) {
-                "gemini" -> when {
+            val listUrls = when (protocol) {
+                "gemini" -> listOf(when {
                     normalized.contains("/models/") -> normalized.substringBefore("/models/") + "/models"
                     normalized.endsWith("/v1beta") || normalized.endsWith("/v1") -> "$normalized/models"
                     URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1beta/models"
                     else -> normalized.substringBefore(":generateContent").substringBeforeLast("/models", normalized) + "/models"
-                }
-                "claude" -> when {
+                })
+                "claude" -> listOf(when {
                     normalized.endsWith("/v1") -> "$normalized/models"
                     normalized.contains("/v1/") -> normalized.substringBefore("/v1/") + "/v1/models"
                     URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1/models"
                     else -> normalized.removeSuffix("/messages") + "/models"
-                }
-                else -> when {
-                    normalized.endsWith("/v1") -> "$normalized/models"
-                    normalized.endsWith("/chat/completions") -> normalized.removeSuffix("/chat/completions") + "/models"
-                    normalized.endsWith("/responses") -> normalized.removeSuffix("/responses") + "/models"
-                    URL(normalized).path.isNullOrBlank() || URL(normalized).path == "/" -> "$normalized/v1/models"
-                    else -> normalized.removeSuffix("/models") + "/models"
-                }
+                })
+                else -> openAiEndpoints(normalized, "/models", preferBarePath = protocol == DEEPSEEK_PROTOCOL)
             }
-            val request = Request.Builder().url(listUrl)
-                .apply {
-                    when (protocol) {
-                        "gemini" -> header("x-goog-api-key", key)
-                        "claude" -> {
-                            header("x-api-key", key)
-                            header("anthropic-version", "2023-06-01")
+            var lastError: RuntimeException? = null
+            for (listUrl in listUrls) {
+                val request = Request.Builder().url(listUrl)
+                    .apply {
+                        when (protocol) {
+                            "gemini" -> header("x-goog-api-key", key)
+                            "claude" -> {
+                                header("x-api-key", key)
+                                header("anthropic-version", "2023-06-01")
+                            }
+                            else -> header("Authorization", "Bearer $key")
                         }
-                        else -> header("Authorization", "Bearer $key")
                     }
+                    .get().build()
+                try {
+                    http.newCall(request).execute().use { response ->
+                        val content = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) throw RuntimeException("HTTP ${response.code}: ${content.take(160)}")
+                        val root = JSONObject(content)
+                        val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data")
+                            ?: throw RuntimeException("供应商模型列表缺少 data/models 字段")
+                        return (0 until arr.length()).mapNotNull { i ->
+                            val item = arr.optJSONObject(i) ?: return@mapNotNull null
+                            if (protocol == "gemini") {
+                                val methods = item.optJSONArray("supportedGenerationMethods")
+                                if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
+                                    return@mapNotNull null
+                            }
+                            item.optString(if (protocol == "gemini") "name" else "id")
+                                .removePrefix("models/").takeIf { it.isNotBlank() }
+                        }.distinct().sorted()
+                    }
+                } catch (e: RuntimeException) {
+                    lastError = e
+                    if (!e.message.orEmpty().contains("HTTP 404")) throw e
                 }
-                .get().build()
-            http.newCall(request).execute().use { response ->
-                val content = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw RuntimeException("HTTP ${response.code}: ${content.take(160)}")
-                val root = JSONObject(content)
-                val arr = root.optJSONArray(if (protocol == "gemini") "models" else "data")
-                    ?: throw RuntimeException("供应商模型列表缺少 data/models 字段")
-                return (0 until arr.length()).mapNotNull { i ->
-                    val item = arr.optJSONObject(i) ?: return@mapNotNull null
-                    if (protocol == "gemini") {
-                        val methods = item.optJSONArray("supportedGenerationMethods")
-                        if (methods != null && (0 until methods.length()).none { methods.optString(it) == "generateContent" })
-                            return@mapNotNull null
-                    }
-                    item.optString(if (protocol == "gemini") "name" else "id")
-                        .removePrefix("models/").takeIf { it.isNotBlank() }
-                }.distinct().sorted()
             }
+            throw lastError ?: RuntimeException("没有可用的模型列表地址")
         }
+
+        /**
+         * Candidate endpoint URLs for the OpenAI-compatible transports, in the order to try.
+         *
+         * Providers differ: plain OpenAI gateways expose /v1/chat/completions, while DeepSeek's
+         * documented endpoints are /chat/completions and /models directly under its base URL.
+         * A complete endpoint the user pinned is used verbatim (with its /v1 counterpart offered
+         * as a fallback) only when it is listed in [honoured] — that is what lets a pinned
+         * /responses stay on the Responses API while a pinned /chat/completions is still
+         * rewritten into /models for a model-list call. Any other trailing endpoint is stripped
+         * and the remainder is treated as the provider base. Callers retry on HTTP 404.
+         */
+        private fun openAiEndpoints(
+            configured: String,
+            endpoint: String,
+            preferBarePath: Boolean,
+            honoured: List<String> = listOf(endpoint)
+        ): List<String> {
+            val raw = configured.trim().trimEnd('/')
+            val hasQuery = raw.contains('?')
+            val query = if (hasQuery) "?" + raw.substringAfter('?') else ""
+            val path = if (hasQuery) raw.substringBefore('?') else raw
+            val tail = ENDPOINT_PATHS.firstOrNull { path.endsWith(it) }
+            if (tail != null && honoured.contains(tail)) {
+                val head = path.removeSuffix(tail)
+                val other = if (head.endsWith("/v1")) head.removeSuffix("/v1") + tail
+                else head + "/v1" + tail
+                return listOf(raw, other + query).distinct()
+            }
+            val stripped = if (tail != null) path.removeSuffix(tail) else path
+            val base = if (stripped.endsWith("/v1")) stripped.removeSuffix("/v1") else stripped
+            val v1 = "$base/v1$endpoint$query"
+            val bare = "$base$endpoint$query"
+            return (if (preferBarePath) listOf(bare, v1) else listOf(v1, bare)).distinct()
+        }
+
+        private val ENDPOINT_PATHS =
+            listOf("/chat/completions", "/responses", "/models", "/completions")
+
+        /** Transport id for DeepSeek: OpenAI wire format, endpoints without the /v1 prefix. */
+        const val DEEPSEEK_PROTOCOL = "deepseek"
     }
 }

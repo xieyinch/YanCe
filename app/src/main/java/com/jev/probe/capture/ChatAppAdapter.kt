@@ -18,6 +18,10 @@ import com.jev.probe.core.Msg
  */
 interface ChatAppAdapter {
     val pkg: String
+
+    /** Label shown next to this app's switch in settings. */
+    val displayName: String
+
     fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot?
 }
 
@@ -67,6 +71,7 @@ private fun findTitleInActionBar(
  *  the bubble's horizontal position (right = me, left = other). */
 class WeChatAdapter : ChatAppAdapter {
     override val pkg = "com.tencent.mm"
+    override val displayName = "微信"
 
     override fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot? {
         val width = res.displayMetrics.widthPixels
@@ -81,7 +86,7 @@ class WeChatAdapter : ChatAppAdapter {
             val node = stack.removeLast()
             val id = node.viewIdResourceName
             val text = node.text?.toString()
-            if (id == BUBBLE_ID && !text.isNullOrBlank()) {
+            if (id == BUBBLE_ID && !text.isNullOrBlank() && !isWeChatSystemNotice(text)) {
                 val b = Rect(); node.getBoundsInScreen(b)
                 bubbles.add(Triple(b.top, b.centerX(), text))
                 if (b.top < firstBubbleTop) firstBubbleTop = b.top
@@ -104,6 +109,32 @@ class WeChatAdapter : ChatAppAdapter {
 }
 
 /**
+ * WeChat's own notices are rendered in the message list and match the bubble id, so they were
+ * being read as if the other person had said them — the reported case being
+ * 「对方账号安全性未知…」, WeChat's warning about an unverified account.
+ *
+ * ⚠️ **Stopgap.** This recognises them by WeChat's own wording, which a real message is very
+ * unlikely to reproduce verbatim — but wording-based detection is brittle and incomplete, and it
+ * cannot see notices WeChat has not used yet. The proper fix is structural (these notices carry
+ * no avatar and are horizontally centred, unlike a real bubble), and that needs a node dump of a
+ * chat actually showing one: 「运行日志」→ 开启「诊断悬浮球」→ 停在微信该聊天 → 点红色「诊」球.
+ *
+ * Deliberately narrow: 「…撤回了一条消息」and 「对方正在输入」 are NOT filtered, because a real
+ * message could contain those words, and a false negative here silently drops what someone said.
+ */
+private val WECHAT_NOTICE_SNIPPETS = listOf(
+    "账号安全性未知",
+    "以下为打招呼消息",
+    "对方开启了朋友验证",
+    "消息已发出，但被对方拒收",
+    "该消息已过期",
+    "该内容已被发布者删除"
+)
+
+private fun isWeChatSystemNotice(text: String): Boolean =
+    WECHAT_NOTICE_SNIPPETS.any { text.contains(it) }
+
+/**
  * Mobile QQ (com.tencent.mobileqq). Nodes are NOT obfuscated (verified on QQ
  * 9.3.50 / Xiaomi 14, 1200x2670): message bodies are plain TextViews carrying
  * `id/mjn`, so collecting only that id already excludes timestamps, sender
@@ -120,6 +151,7 @@ class WeChatAdapter : ChatAppAdapter {
  */
 class QQAdapter : ChatAppAdapter {
     override val pkg = "com.tencent.mobileqq"
+    override val displayName = "手机 QQ"
 
     override fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot? {
         val width = res.displayMetrics.widthPixels
@@ -173,6 +205,7 @@ class QQAdapter : ChatAppAdapter {
  *  position, same as WeChat. */
 class FeishuAdapter : ChatAppAdapter {
     override val pkg = "com.ss.android.lark"
+    override val displayName = "飞书"
 
     override fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot? {
         val width = res.displayMetrics.widthPixels
@@ -289,6 +322,7 @@ private fun parseXDesc(desc: String): Pair<String, String>? {
  */
 class XAdapter : ChatAppAdapter {
     override val pkg = "com.twitter.android"
+    override val displayName = "X / Twitter 私信"
 
     override fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot? {
         val width = res.displayMetrics.widthPixels
@@ -331,3 +365,212 @@ class XAdapter : ChatAppAdapter {
 
     private data class Row(val top: Int, val sender: String, val text: String)
 }
+
+/**
+ * 小红书 / RedNote direct messages (`com.xingin.xhs`).
+ *
+ * **结构是实测的，不是猜的。** Calibrated against a node dump taken from the real app
+ * (小红书 9.49.1, 1080x2376) through the in-app diagnostic ball:
+ *
+ * ```
+ * 7 |ViewGroup                       [0,123][1080,255]     标题栏
+ * 12|TextView   "莫西莫西"            [249,162][441,217]
+ * 8 |FrameLayout                     [0,255][1080,423]     推广条：列表的【兄弟】节点，盖在列表上
+ * 10|TextView   "加个关注，方便以后常聊" [0,255][768,387]
+ * 10|TextView   "关注"                [768,279][948,363]
+ * 8 |RecyclerView   CS               [0,257][1080,2076]    ← 消息列表
+ * 9 |LinearLayout   C                [0,257][1080,382]     一行消息
+ * 12|RelativeLayout 头像              [48,257][156,352]     ← 对方：贴左边缘
+ * 15|TextView   "哈哈 玩不来"          [180,257][491,358]
+ * ...
+ * 12|RelativeLayout 头像              [924,796][1032,910]   ← 我：贴右边缘
+ * 15|TextView   "看你帖子以为原呢…"    [180,796][900,970]
+ * 10|TextView   "14:02"              [499,1798][581,1839]  时间分隔（正则排除）
+ * 10|RecyclerView   S                [0,2076][1080,2172]   ← 快捷短语行：第二个 RecyclerView
+ * 10|EditText   "发消息…"             [180,2226][786,2346]  ← 输入框
+ * ```
+ *
+ * What that dump settles:
+ *
+ *  - **The tree is fully readable** (175 nodes, `有text=19 有desc=0`). 小红书 does *not* hide its
+ *    nodes from this service the way WeChat 8.0.52+ does, and message bodies live in
+ *    `TextView.text` — never in `contentDescription`.
+ *  - Resource-ids really are all `com.xingin.xhs:id/0_resource_name_obfuscated` at runtime,
+ *    exactly as the APK analysis predicted. Id-keyed lookup is impossible; this adapter never
+ *    reads ids.
+ *  - The message list is the **largest vertical scrollable** node; the quick-phrase row is a
+ *    second, horizontally-shaped RecyclerView below it.
+ *  - **The header promo strip overlaps the list's bounds but is a sibling**, drawn on top. So
+ *    "text whose bounds fall inside the list rectangle" is not enough — 「关注」 would be read as
+ *    a message. Only text that is a **descendant of the list node** counts as conversation.
+ *  - Sides come from the **avatar**, pinned to the outer edge (x≈48 for the other person,
+ *    x≈1032 for me). Long bubbles fill the same horizontal span on both sides, so bubble
+ *    geometry alone cannot separate them — which is why the avatar, not the bubble, decides.
+ *
+ * Confirmed working on the device it was calibrated against — the recognised messages, their
+ * order and their sides were all correct — so it is controlled by its own switch in settings,
+ * like every other adapter.
+ */
+class XhsAdapter : ChatAppAdapter {
+    override val pkg = "com.xingin.xhs"
+    override val displayName = "小红书私信"
+
+    override fun extract(root: AccessibilityNodeInfo, res: Resources): ChatSnapshot? {
+        val width = res.displayMetrics.widthPixels
+        val height = res.displayMetrics.heightPixels
+
+        // Pass 1: the composer proves we are inside a thread (the DM list, the feed and a profile
+        // have none); the largest vertical scroller is the message list.
+        var composerTop = -1
+        var list: AccessibilityNodeInfo? = null
+        var listArea = 0L
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var guard = 0
+        while (stack.isNotEmpty() && guard < 8000) {
+            guard++
+            val node = stack.removeLast()
+            val cls = node.className?.toString().orEmpty()
+            val b = Rect()
+            node.getBoundsInScreen(b)
+            if (node.isEditable || cls.endsWith("EditText")) {
+                if (composerTop < 0 || b.top < composerTop) composerTop = b.top
+            } else if (node.isScrollable && b.width() > 0 && b.height() > b.width()) {
+                val area = b.width().toLong() * b.height()
+                if (area > listArea) { listArea = area; list = node }
+            }
+            for (i in node.childCount - 1 downTo 0) node.getChild(i)?.let { stack.addLast(it) }
+        }
+        if (composerTop < 0) return null
+
+        // Pass 2: collect message text from the list subtree. Walking from the list node — rather
+        // than filtering the whole screen by the list's rectangle — is what keeps the promo strip
+        // and the quick-phrase row out: both overlap or sit below the list but are not inside it.
+        val container = list ?: root
+        val topLimit = (height * 0.15).toInt()
+        val hScrollers = ArrayList<IntArray>()
+        val candidates = ArrayList<XhsLine>()
+        val stack2 = ArrayDeque<AccessibilityNodeInfo>()
+        stack2.addLast(container)
+        var guard2 = 0
+        while (stack2.isNotEmpty() && guard2 < 8000) {
+            guard2++
+            val node = stack2.removeLast()
+            val cls = node.className?.toString().orEmpty()
+            val b = Rect()
+            node.getBoundsInScreen(b)
+            if (list == null && node.isScrollable && b.width() > 0 && b.height() > 0 &&
+                b.height() <= b.width()) {
+                hScrollers.add(intArrayOf(b.left, b.top, b.right, b.bottom))  // quick-phrase row
+            }
+            val text = node.text?.toString()?.trim()
+            if (!text.isNullOrBlank() && cls.endsWith("TextView") && !node.isEditable &&
+                b.width() > 0 && b.height() > 0 && !looksLikeTimestamp(text)
+            ) {
+                candidates.add(XhsLine(Rect(b), text, node))
+            }
+            for (i in node.childCount - 1 downTo 0) node.getChild(i)?.let { stack2.addLast(it) }
+        }
+
+        // With a list node, membership in its subtree is the whole test. Without one we fall back
+        // to a band above the composer, minus horizontal scrollers (only now fully collected).
+        val lines = if (list != null) candidates else candidates.filter {
+            inFallbackBand(
+                top = it.bounds.top, bottom = it.bounds.bottom,
+                centerX = it.bounds.centerX(), centerY = it.bounds.centerY(),
+                composerTop = composerTop, topLimit = topLimit, hScrollers = hScrollers
+            )
+        }
+        if (lines.isEmpty()) return null
+
+        // A bubble wrapper and its inner text share a row; keep one of them.
+        val deduped = lines.sortedBy { it.bounds.top }
+            .distinctBy { "${it.bounds.top / 8}|${it.bounds.centerX() / 8}|${it.text}" }
+
+        val title = findTitleInActionBar(root, deduped.first().bounds.top, width, res, 0.15, 0.85)
+        val msgs = deduped.map { Msg(sideOf(it.node, it.bounds, width), it.text) }
+        return ChatSnapshot(title, msgs)
+    }
+
+    /**
+     * Which side sent this message.
+     *
+     * The avatar decides, not the bubble: 小红书 pins the avatar to the outer edge of whichever
+     * side spoke (x≈48 on the left, x≈1032 on the right), whereas a long bubble spans the same
+     * horizontal range on both sides — in the calibration dump both
+     * 「我之前玩倩女幽魂那种的手游 你玩过吗」 and my 「看你帖子以为原呢…」 measure [180..900].
+     * So we climb a few parents looking for a small, edge-hugging sibling on the same row.
+     */
+    private fun sideOf(node: AccessibilityNodeInfo, self: Rect, width: Int): String {
+        var cur = node.parent
+        var hops = 0
+        // The calibration dump puts the avatar 4 levels up (text → bubble → content → avatar),
+        // so 6 leaves headroom for an extra wrapper without reaching the list's own children —
+        // and those could not match anyway, since they never overlap this row vertically.
+        while (cur != null && hops < 6) {
+            for (i in 0 until cur.childCount) {
+                val child = cur.getChild(i) ?: continue
+                val b = Rect()
+                child.getBoundsInScreen(b)
+                if (b.width() <= 0 || b.height() <= 0) continue
+                if (b.width() > width * 0.30) continue                       // that is the bubble
+                if (b.left == self.left && b.top == self.top &&
+                    b.right == self.right && b.bottom == self.bottom) continue
+                if (b.bottom <= self.top || b.top >= self.bottom) continue    // must share the row
+                avatarSide(b.centerX(), width)?.let { return it }
+            }
+            cur = cur.parent
+            hops++
+        }
+        return bubbleSide(self.centerX(), width)
+    }
+
+    private data class XhsLine(val bounds: Rect, val text: String, val node: AccessibilityNodeInfo)
+}
+
+/** The avatar column: pinned near one outer edge, so its centre is decisive on its own. */
+private fun avatarSide(centerX: Int, width: Int): String? = when {
+    centerX < width * 0.25 -> "other"
+    centerX > width * 0.75 -> "me"
+    else -> null
+}
+
+/** Fallback when no avatar was found: even short bubbles still hug their own side. */
+private fun bubbleSide(centerX: Int, width: Int): String =
+    if (centerX > width / 2) "me" else "other"
+
+/**
+ * The no-list fallback: a text node counts only if it sits above the composer, below [topLimit],
+ * and outside every horizontal scroller. Plain integers rather than Android types, so this stays
+ * unit-testable without a device.
+ */
+private fun inFallbackBand(
+    top: Int,
+    bottom: Int,
+    centerX: Int,
+    centerY: Int,
+    composerTop: Int,
+    topLimit: Int,
+    hScrollers: List<IntArray>
+): Boolean {
+    if (bottom > composerTop) return false
+    for (r in hScrollers) {
+        if (centerX in r[0]..r[2] && centerY in r[1]..r[3]) return false
+    }
+    return top >= topLimit
+}
+
+/**
+ * Every adapted chat app, in the order shown in settings.
+ *
+ * Each one is gated by its own switch ([Prefs.enabledAppsOrNull]): a package the user has not
+ * enabled is never read, analysed or sent anywhere — the capture service refuses it before any
+ * adapter runs.
+ */
+val CHAT_ADAPTERS: List<ChatAppAdapter> = listOf(
+    WeChatAdapter(),
+    QQAdapter(),
+    XAdapter(),
+    FeishuAdapter(),
+    XhsAdapter()
+)

@@ -1,6 +1,7 @@
 package com.jev.probe.capture
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,7 @@ import com.jev.probe.core.AppLog
 import com.jev.probe.core.Prefs
 import com.jev.probe.core.RelationshipMemory
 import com.jev.probe.jev.JevClient
+import com.jev.probe.overlay.DiagBubble
 import com.jev.probe.overlay.OverlayController
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -36,7 +38,42 @@ open class ChatCaptureService : AccessibilityService() {
     private val worker = Executors.newFixedThreadPool(2)
 
     /** Adapted chat apps, keyed by package name. */
-    private val adapters = listOf(WeChatAdapter(), QQAdapter(), XAdapter(), FeishuAdapter()).associateBy { it.pkg }
+    private val adapters = CHAT_ADAPTERS.associateBy { it.pkg }
+
+    /**
+     * The adapter for a foreground package, or null when the app is unsupported or the user
+     * turned its switch off. Refusing here — before any adapter runs — is what makes "only the
+     * apps you enabled are read" true rather than merely a UI promise.
+     */
+    private fun adapterFor(pkg: String?): ChatAppAdapter? {
+        val adapter = adapters[pkg] ?: return null
+        if (!isAppEnabled(pkg)) return null
+        return adapter
+    }
+
+    /** Unset means the switch set was never saved, so every supported app counts as enabled. */
+    private fun isAppEnabled(pkg: String?): Boolean {
+        if (pkg == null) return false
+        val enabled = prefs.enabledAppsOrNull() ?: return true
+        return enabled.contains(pkg)
+    }
+
+    /**
+     * Keep the diagnostic ball up over any app except our own, when the user enabled it.
+     * It must never cover 言策 itself: tapping it there would only ever dump our own UI, which
+     * is exactly the mistake the Log page's button made.
+     */
+    private fun updateDiagBubble(fg: String) {
+        val want = prefs.diagnosticBubble && fg != packageName
+        main.post {
+            val bubble = diagBubble ?: return@post
+            if (want) {
+                if (!bubble.isShowing()) bubble.show()
+            } else if (bubble.isShowing()) {
+                bubble.hide()
+            }
+        }
+    }
 
     /** Submit to the worker, ignoring rejection after the service is torn down
      *  (a stale overlay callback must never crash the process). */
@@ -46,6 +83,7 @@ open class ChatCaptureService : AccessibilityService() {
     private lateinit var prefs: Prefs
     private lateinit var relationshipMemory: RelationshipMemory
     private var overlay: OverlayController? = null
+    private var diagBubble: DiagBubble? = null
 
     private var lastSignature: String = ""
     private var activePkg: String? = null
@@ -60,12 +98,14 @@ open class ChatCaptureService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AppLog.init(this)
+        live = this
         prefs = Prefs(this)
         relationshipMemory = RelationshipMemory(this)
         overlay = OverlayController(this)
         overlay?.onManualAnalyze = {
             currentSnapshot?.let { pendingSnapshot = it; runAnalysis() }
         }
+        diagBubble = DiagBubble(this) { dumpForegroundText() }
         // Keep the process at foreground importance so MIUI does not freeze us.
         runCatching { KeepAliveService.start(this) }
         // HyperOS may kill and restart us. On (re)connect, proactively re-show the
@@ -89,10 +129,13 @@ open class ChatCaptureService : AccessibilityService() {
         // (com.jev.probe) is not an adapted package, so it hides too.
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val fg = rootInActiveWindow?.packageName?.toString()
-            if (fg != null && fg !in adapters) {
+            if (fg != null) {
                 foregroundPkg = fg
-                main.post { overlay?.hide() }
-                return
+                updateDiagBubble(fg)
+                if (adapterFor(fg) == null) {
+                    main.post { overlay?.hide() }
+                    return
+                }
             }
         }
 
@@ -106,7 +149,7 @@ open class ChatCaptureService : AccessibilityService() {
     private fun maybeCapture() {
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString()
-        val adapter = adapters[pkg] ?: return
+        val adapter = adapterFor(pkg) ?: return
         // Only act inside a chat window (the adapter returns null elsewhere).
         val snapshot = adapter.extract(root, resources) ?: return
         if (snapshot.messages.isEmpty()) return
@@ -303,12 +346,62 @@ open class ChatCaptureService : AccessibilityService() {
         overlay?.onManualAnalyze = null
         overlay?.hide()
         overlay = null
+        diagBubble?.hide()
+        diagBubble = null
         worker.shutdownNow()
+        if (live === this) live = null
     }
 
     companion object {
         private const val TAG = "JEVASSIST"
         private const val DEBOUNCE_MS = 250L
         private const val RERUN_DELAY_MS = 120L
+
+        /** The running service, so the diagnostics screen can read the foreground window. */
+        @Volatile
+        private var live: ChatCaptureService? = null
+
+        /**
+         * Frame a node tree as text, so a new chat app can be adapted from what this service
+         * actually sees rather than from guesswork.
+         *
+         * Prefers a window that is NOT ours: when this is called from the Log page, our own
+         * activity is the active window, and dumping that only ever returns 言策's own UI.
+         * The OS usually keeps the previous app's window attached, so the largest foreign
+         * window is tried next. If that fails too, the text says so explicitly and points at
+         * the diagnostic ball, which avoids the problem by staying non-focusable.
+         */
+        fun dumpForegroundText(): String {
+            val service = live
+                ?: return "无障碍服务未运行。\n请先在系统设置里开启言策的无障碍服务，再停在要诊断的界面重试。\n"
+            return runCatching {
+                val self = service.packageName
+                val active = service.rootInActiveWindow
+                val activeIsSelf = active?.packageName?.toString() == self
+                val root = if (active != null && !activeIsSelf) active
+                else foreignWindowRoot(service, self) ?: active
+                val text = NodeDump.render(root)
+                if (root?.packageName?.toString() == self) {
+                    text + "\n注意：这次抓到的还是言策自己（包名=" + self + "）。\n" +
+                        "要抓别的应用，请在设置里开启「诊断悬浮球」，停在目标应用的聊天界面，" +
+                        "点那个红色「诊」球即可。\n"
+                } else {
+                    text
+                }
+            }.getOrElse { "抓取失败：${it.javaClass.simpleName}: ${it.message}" }
+        }
+
+        /** The largest still-attached window that does not belong to us, if the OS kept one. */
+        private fun foreignWindowRoot(
+            service: AccessibilityService,
+            self: String
+        ): AccessibilityNodeInfo? = service.windows
+            .mapNotNull { it.root }
+            .filter { it.packageName?.toString() != self }
+            .maxByOrNull { node ->
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                r.width().toLong() * r.height()
+            }
     }
 }

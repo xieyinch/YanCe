@@ -57,6 +57,9 @@ class OverlayController(private val ctx: Context) {
     private var lastJudgment: Analysis? = null
     private var lastFill: ((String) -> Unit)? = null
 
+    /** True when a result arrived while the panel was closed and has not been looked at yet. */
+    private var hasUnseen = false
+
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).roundToInt()
 
@@ -257,6 +260,8 @@ class OverlayController(private val ctx: Context) {
             params.x = dp(6)
             val maxTop = (screenH * 0.14f).roundToInt()
             if (params.y > maxTop) params.y = maxTop
+            hasUnseen = false
+            styleBubble()
             panel?.visibility = View.VISIBLE
         } else {
             panel?.visibility = View.GONE
@@ -266,10 +271,44 @@ class OverlayController(private val ctx: Context) {
         root?.let { runCatching { wm.updateViewLayout(it, params) } }
     }
 
+    /**
+     * Reveal the panel only when the user asked for auto-expand. Otherwise the bubble simply
+     * lights up, so a result never covers the chat until it is tapped — which is what people
+     * found intrusive.
+     */
+    private fun maybeExpand() {
+        if (expanded) return
+        if (prefs.autoExpandOverlay) toggle() else markUnseen()
+    }
+
+    /** Make a ready result noticeable while the panel stays closed. */
+    private fun markUnseen() {
+        if (hasUnseen) return
+        hasUnseen = true
+        styleBubble()
+    }
+
+    /** The bubble colour carries one bit of state: mint means there is something new to look at. */
+    private fun styleBubble() {
+        val b = bubble ?: return
+        b.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            if (hasUnseen) {
+                setColor(YanCeUi.MINT)
+                setStroke(dp(3), YanCeUi.NAVY)
+            } else {
+                setColor(Color.argb(245, 23, 26, 58))
+            }
+        }
+        b.setTextColor(if (hasUnseen) YanCeUi.NAVY else Color.WHITE)
+    }
+
     // ------------------------------------------------------------ public API
 
     fun showIdle(title: String?) {
         ensureRoot(); bubble?.alpha = 0.55f
+        hasUnseen = false
+        styleBubble()
         setContent(listOf(
             stateView("助手已连接", if (title.isNullOrBlank()) "等待新消息，也可以手动分析" else "当前会话：$title", false),
             bigButton("分析当前对话") { onManualAnalyze?.invoke() }
@@ -279,7 +318,7 @@ class OverlayController(private val ctx: Context) {
     fun showQueued(title: String?) {
         ensureRoot(); bubble?.alpha = 1f
         setContent(listOf(stateView("已识别到新消息", "正在准备分析${title?.let { " · $it" } ?: ""}", true)))
-        if (!expanded) toggle()
+        maybeExpand()
     }
 
     private fun bigButton(label: String, onClick: () -> Unit) = TextView(ctx).apply {
@@ -295,7 +334,7 @@ class OverlayController(private val ctx: Context) {
     fun showLoading() {
         ensureRoot(); bubble?.alpha = 1f
         setContent(listOf(stateView("正在理解这段对话", "分析意图、风险与合适的回应…", true)))
-        if (!expanded) toggle()
+        maybeExpand()
     }
 
     fun showError(msg: String) {
@@ -304,7 +343,7 @@ class OverlayController(private val ctx: Context) {
             line("出错了", "#DC2626", 14f, true),
             hint(msg),
             reAnalyzeBtn()))
-        if (!expanded) toggle()
+        maybeExpand()
     }
 
     fun showJudgment(a: Analysis) {
@@ -325,7 +364,7 @@ class OverlayController(private val ctx: Context) {
         val r = root ?: return
         runCatching { wm.removeView(r) }
         root = null; bubble = null; panel = null; contentBox = null; dangerDot = null; expanded = false
-        lastJudgment = null; lastFill = null
+        lastJudgment = null; lastFill = null; hasUnseen = false
     }
 
     fun resetConversation(title: String?) {
@@ -421,7 +460,7 @@ class OverlayController(private val ctx: Context) {
         views.add(reAnalyzeBtn())
 
         setContent(views)
-        if (!expanded) toggle()
+        maybeExpand()
     }
 
     private fun dangerBadge(lvl: Int, max: Int): View {

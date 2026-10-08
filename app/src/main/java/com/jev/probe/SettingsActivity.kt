@@ -10,7 +10,9 @@ import android.os.Looper
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -20,6 +22,7 @@ import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.jev.probe.capture.CHAT_ADAPTERS
 import com.jev.probe.core.ChatSnapshot
 import com.jev.probe.core.AppLog
 import com.jev.probe.core.Msg
@@ -77,8 +80,16 @@ class SettingsActivity : AppCompatActivity() {
         val providerNameEdit = edit(prefs.llmProviderName, "例如：我的 API")
         card1.addView(providerNameEdit)
         card1.addView(label("接口协议"))
-        val protocolNames = listOf("OpenAI 兼容", "Google Gemini", "Anthropic Claude")
-        val protocolIds = listOf("openai", "gemini", "claude")
+        // Vendor presets. DeepSeek speaks the OpenAI wire format but hangs its endpoints
+        // directly off the base URL (no /v1), so it gets its own entry.
+        val protocolOptions = listOf(
+            "OpenAI 兼容" to "openai",
+            "DeepSeek" to "deepseek",
+            "Google Gemini" to "gemini",
+            "Anthropic Claude" to "claude"
+        )
+        val protocolNames = protocolOptions.map { it.first }
+        val protocolIds = protocolOptions.map { it.second }
         val protocol = Spinner(this).apply {
             adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, protocolNames)
             setSelection(protocolIds.indexOf(prefs.llmProtocol).coerceAtLeast(0))
@@ -90,7 +101,7 @@ class SettingsActivity : AppCompatActivity() {
         card1.addView(label("供应商地址"))
         val chatUrlEdit = edit(prefs.chatUrl, "https://example.com/v1 或完整请求地址")
         card1.addView(chatUrlEdit)
-        card1.addView(text("可填写域名、/v1 地址或完整请求地址，言策会自动补全。Gemini 也支持 {model} 占位符。", 12f, sub).apply {
+        card1.addView(text("可填写域名、/v1 地址或完整请求地址，言策会自动补全；路径不对会在 404 后自动换另一种写法。Gemini 也支持 {model} 占位符。", 12f, sub).apply {
             setPadding(0, dp(5), 0, 0)
         })
 
@@ -109,6 +120,36 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(0, dp(8), 0, 0)
         }
         card1.addView(modelStatus)
+
+        // DeepSeek preset: fill the base URL and seed its known models, so the page can be
+        // saved (at least one model is required) before any model-list round-trip succeeds.
+        var lastPreset = protocolIds[protocol.selectedItemPosition]
+        protocol.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val chosen = protocolIds[position]
+                if (chosen == lastPreset) return
+                lastPreset = chosen
+                if (chosen != "deepseek") return
+                val url = chatUrlEdit.text.toString().trim()
+                if (url.isBlank() || url.startsWith("https://example.com")) {
+                    chatUrlEdit.setText(Prefs.DEEPSEEK_BASE_URL)
+                }
+                if (providerNameEdit.text.toString().isBlank() ||
+                    providerNameEdit.text.toString() == "自定义供应商") {
+                    providerNameEdit.setText("DeepSeek")
+                }
+                if (addedModels.isEmpty()) {
+                    addedModels.addAll(Prefs.DEEPSEEK_MODELS)
+                    prefs.availableModels = addedModels
+                    modelAdapter.clear(); modelAdapter.addAll(addedModels.sorted()); modelAdapter.notifyDataSetChanged()
+                    modelSpinner.setSelection(addedModels.sorted().indexOf(Prefs.DEEPSEEK_MODELS.first()).coerceAtLeast(0))
+                    modelStatus.text = "已预置 DeepSeek 常用模型，可点上方按钮拉取最新列表"
+                }
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
         val manualModelEdit = edit("", "模型名称，例如 gpt-4o-mini")
         card1.addView(manualModelEdit)
         card1.addView(secondaryBtn("手动添加模型") {
@@ -202,6 +243,21 @@ class SettingsActivity : AppCompatActivity() {
         card2.addView(autoRow)
         root.addView(card2)
 
+        // --- 识别的聊天应用 ---
+        root.addView(section("识别的聊天应用"))
+        val appCard = card()
+        appCard.addView(text("只有打开的应用才会被识别。关掉的应用完全不读取、不分析、也不外发任何内容。", 12f, sub).apply {
+            setPadding(0, dp(8), 0, dp(2))
+        })
+        val enabledNow = prefs.enabledAppsOrNull() ?: CHAT_ADAPTERS.map { it.pkg }.toSet()
+        val appRows = ArrayList<Pair<String, LinearLayout>>()
+        for (adapter in CHAT_ADAPTERS) {
+            val row = toggleRow(adapter.displayName, adapter.pkg in enabledNow)
+            appCard.addView(row)
+            appRows.add(adapter.pkg to row)
+        }
+        root.addView(appCard)
+
         // --- Local relationship memory ---
         val relationshipMemory = RelationshipMemory(this)
         root.addView(section("关系记忆"))
@@ -233,7 +289,15 @@ class SettingsActivity : AppCompatActivity() {
             })
         }
         card3.addView(seek)
+        val expandRow = toggleRow("结果就绪时自动展开面板", prefs.autoExpandOverlay)
+        card3.addView(expandRow)
+        card3.addView(text("关闭时悬浮窗只保持一个小球，不会挡住聊天；有新结果它会变成薄荷绿，点一下才展开。",
+            12f, sub).apply { setPadding(0, dp(6), 0, 0) })
         root.addView(card3)
+
+        // The 诊断 card is built below the action buttons, but the save handler needs this row,
+        // so create it here and attach it to that card further down.
+        val diagRow = toggleRow("诊断悬浮球（抓取任意应用界面）", prefs.diagnosticBubble)
 
         // --- Actions ---
         val result = text("", 13f, sub).apply { setPadding(0, dp(12), 0, dp(4)) }
@@ -253,6 +317,10 @@ class SettingsActivity : AppCompatActivity() {
             prefs.otherMbti = otherMbtiSpinner.selectedItem?.toString().orEmpty().takeUnless { it == "不设置" }.orEmpty()
             prefs.whitelist = wlEdit.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             prefs.autoAnalyze = (autoRow.tag as? Boolean) ?: true
+            prefs.setEnabledApps(
+                appRows.filter { (it.second.tag as? Boolean) == true }.map { it.first }.toSet())
+            prefs.autoExpandOverlay = (expandRow.tag as? Boolean) ?: false
+            prefs.diagnosticBubble = (diagRow.tag as? Boolean) ?: false
             relationshipMemory.enabled = (memoryRow.tag as? Boolean) ?: false
             prefs.overlayOpacity = seek.progress + 60
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
@@ -295,6 +363,13 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(section("诊断"))
         val logCard = card()
         logCard.addView(text("遇到接口或解析问题时，可在运行日志中查看时间、处理阶段和错误原因。日志不会保存聊天原文或密钥。", 12f, sub))
+        logCard.addView(diagRow)
+        logCard.addView(text("适配新聊天应用时用：开启后会出现一个红色「诊」悬浮球。" +
+            "停在目标应用的聊天界面，点它就会把那个界面的节点树复制到剪贴板（只在本机，不会上传）。" +
+            "不要在本应用自己的页面点 —— 点按钮的瞬间前台就是言策，抓到的是言策自己。" +
+            "开关切换后，切一下应用才会出现或消失。", 12f, sub).apply {
+            setPadding(0, dp(6), 0, dp(4))
+        })
         logCard.addView(secondaryBtn("查看运行日志") {
             startActivity(Intent(this, LogActivity::class.java))
         })
